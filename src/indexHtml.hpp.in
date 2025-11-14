@@ -1,0 +1,8 @@
+#pragma once
+
+namespace resources
+{
+    inline constexpr const char index_html[] = R"accio_index_html(
+@INDEX_HTML_CONTENT@
+)accio_index_html";
+}

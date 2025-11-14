@@ -1,0 +1,10 @@
+#pragma once
+
+const char *const PROJECT_NAME = "@PROJECT_NAME@";
+const char *const ORGANIZATION_DOMAIN = "https://github.com/TaipaXu";
+const char *const PROJECT_DOMAIN = "https://github.com/TaipaXu/accio";
+const char *const PROJECT_VERSION = "@PROJECT_VERSION@";
+const char *const PROJECT_VERSION_MAJOR = "@PROJECT_VERSION_MAJOR@";
+const char *const PROJECT_VERSION_MINOR = "@PROJECT_VERSION_MINOR@";
+const char *const PROJECT_VERSION_PATCH = "@PROJECT_VERSION_PATCH@";
+const char *const DISPLAY_NAME = "accio";
