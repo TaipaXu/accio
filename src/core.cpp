@@ -254,14 +254,14 @@ void Core::start(const std::string &path)
             {
                 const auto parentPath = fs::path{relativePath}.parent_path().generic_string();
                 const std::string href = buildHrefForPath(parentPath);
-                filesHtml += "<li><a href=\"" + href + "\">../</a></li>\n";
+                filesHtml += "<li><a href=\"" + href + "\">↩ ../</a></li>\n";
             }
 
             for (const auto &[filename, isDirectory] : directoryEntries)
             {
                 const std::string childPath = relativePath.empty() ? filename : relativePath + "/" + filename;
                 const std::string href = buildHrefForPath(childPath);
-                const std::string displayName = isDirectory ? filename + "/" : filename;
+                const std::string displayName = isDirectory ? "📁 " + filename + "/" : filename;
 
                 filesHtml += "<li><a href=\"" + href + "\">" + escapeForHtml(displayName) + "</a></li>\n";
             }
