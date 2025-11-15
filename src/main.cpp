@@ -14,11 +14,12 @@ int main(int argc, char *argv[])
     namespace po = boost::program_options;
 
     po::options_description optionsDescription("Allowed options");
-    optionsDescription.add_options()("help,h", "Show help message")                              // help option
-        ("version,v", "Show version information")                                                // version option
-        ("path,p", po::value<std::string>()->implicit_value(""), "Current directory path")       // path option
-        ("host", po::value<std::string>()->implicit_value(""), "Server host (default: 0.0.0.0)") // host option
-        ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)");  // port option
+    optionsDescription.add_options()("help,h", "Show help message")                                                      // help option
+        ("version,v", "Show version information")                                                                        // version option
+        ("path,p", po::value<std::string>()->implicit_value(""), "Current directory path")                               // path option
+        ("uploads,u", po::value<std::string>()->implicit_value(""), "Uploads directory path (default: Downloads/accio)") // uploads option
+        ("host", po::value<std::string>()->implicit_value(""), "Server host (default: 0.0.0.0)")                         // host option
+        ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)");                          // port option
 
     po::positional_options_description positionalOptionsDescription;
     positionalOptionsDescription.add("path", -1);
@@ -62,6 +63,18 @@ int main(int argc, char *argv[])
             if (path.empty())
             {
                 std::cerr << "Missing value for option '--path'" << std::endl;
+                std::cerr << optionsDescription << std::endl;
+                return EXIT_FAILURE;
+            }
+        }
+
+        std::string uploadsPath;
+        if (variablesMap.count("uploads"))
+        {
+            uploadsPath = variablesMap["uploads"].as<std::string>();
+            if (uploadsPath.empty())
+            {
+                std::cerr << "Missing value for option '--uploads'" << std::endl;
                 std::cerr << optionsDescription << std::endl;
                 return EXIT_FAILURE;
             }
@@ -118,7 +131,7 @@ int main(int argc, char *argv[])
         const auto port = static_cast<unsigned short>(portValue);
 
         Core core;
-        core.start(path, host, port);
+        core.start(path, uploadsPath, host, port);
     }
 
     return EXIT_SUCCESS;

@@ -29,3 +29,7 @@ endif()
 target_include_directories(${TARGET} PRIVATE ${GENERATED_INCLUDE_DIR})
 
 target_link_libraries(${TARGET} PRIVATE Boost::program_options Drogon::Drogon)
+
+if(WIN32)
+    target_link_libraries(${TARGET} PRIVATE Shell32 Ole32)
+endif()

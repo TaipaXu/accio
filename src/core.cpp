@@ -7,11 +7,18 @@
 #include <stdexcept>
 #include <system_error>
 #include <filesystem>
+#include <fstream>
 #include <utility>
+#include <cstdlib>
 #include <drogon/drogon.h>
 #include <drogon/MultiPart.h>
 #include <drogon/utils/Utilities.h>
 #include "indexHtml.hpp"
+#ifdef _WIN32
+#include <windows.h>
+#include <shlobj.h>
+#include <knownfolders.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -174,9 +181,245 @@ namespace
 
         return escaped;
     }
+
+    fs::path getHomeDirectory()
+    {
+#ifdef _WIN32
+        if (const char *userProfile = std::getenv("USERPROFILE"))
+        {
+            if (*userProfile != '\0')
+            {
+                return fs::path{userProfile};
+            }
+        }
+
+        const char *homeDrive = std::getenv("HOMEDRIVE");
+        const char *homePath = std::getenv("HOMEPATH");
+        if (homeDrive && homePath)
+        {
+            return fs::path{std::string{homeDrive} + homePath};
+        }
+
+        if (const char *homeEnv = std::getenv("HOME"))
+        {
+            if (*homeEnv != '\0')
+            {
+                return fs::path{homeEnv};
+            }
+        }
+#else
+        if (const char *homeEnv = std::getenv("HOME"))
+        {
+            if (*homeEnv != '\0')
+            {
+                return fs::path{homeEnv};
+            }
+        }
+#endif
+        return {};
+    }
+
+    std::string stripQuotes(const std::string &text)
+    {
+        if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
+        {
+            return text.substr(1, text.size() - 2);
+        }
+        return text;
+    }
+
+    fs::path expandUserDirTemplate(const std::string &value, const fs::path &home)
+    {
+        if (value.empty())
+        {
+            return {};
+        }
+
+        std::string result;
+        result.reserve(value.size() + (home.empty() ? 0 : home.string().size()));
+
+        for (std::size_t i = 0; i < value.size(); ++i)
+        {
+            const char ch = value[i];
+
+            if (ch == '$' && value.compare(i, 5, "$HOME") == 0)
+            {
+                if (!home.empty())
+                {
+                    result += home.string();
+                }
+                i += 4;
+                continue;
+            }
+
+            if (ch == '~' && i == 0)
+            {
+                if (!home.empty())
+                {
+                    result += home.string();
+                }
+                continue;
+            }
+
+            if (ch == '\\' && i + 1 < value.size())
+            {
+                ++i;
+                result.push_back(value[i]);
+                continue;
+            }
+
+            result.push_back(ch);
+        }
+
+        return fs::path{result};
+    }
+
+    fs::path parseXdgDownloadDir(const fs::path &home)
+    {
+        const fs::path configPath = home / ".config" / "user-dirs.dirs";
+        std::ifstream in{configPath};
+        if (!in)
+        {
+            return {};
+        }
+
+        std::string line;
+        while (std::getline(in, line))
+        {
+            const auto commentPos = line.find('#');
+            if (commentPos != std::string::npos)
+            {
+                line.erase(commentPos);
+            }
+
+            const auto firstNotSpace = line.find_first_not_of(" \t");
+            if (firstNotSpace == std::string::npos)
+            {
+                continue;
+            }
+
+            constexpr std::string_view key = "XDG_DOWNLOAD_DIR=";
+            if (line.compare(firstNotSpace, key.size(), key) != 0)
+            {
+                continue;
+            }
+
+            std::string value = stripQuotes(line.substr(firstNotSpace + key.size()));
+            fs::path resolved = expandUserDirTemplate(value, home);
+            if (!resolved.empty())
+            {
+                return resolved;
+            }
+        }
+
+        return {};
+    }
+
+    fs::path systemDownloadsDirectory()
+    {
+#ifdef _WIN32
+        if (PWSTR downloadsWide = nullptr;
+            SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, KF_FLAG_DEFAULT, nullptr, &downloadsWide)))
+        {
+            fs::path resolved{std::wstring{downloadsWide}};
+            CoTaskMemFree(downloadsWide);
+            if (!resolved.empty())
+            {
+                return resolved;
+            }
+        }
+#endif
+
+        const fs::path home = getHomeDirectory();
+
+#if defined(__linux__) || defined(__unix__)
+        if (!home.empty())
+        {
+            if (auto xdg = parseXdgDownloadDir(home); !xdg.empty())
+            {
+                return xdg;
+            }
+        }
+#endif
+
+        if (!home.empty())
+        {
+            return home / "Downloads";
+        }
+
+        return {};
+    }
+
+    fs::path defaultUploadsDirectory()
+    {
+        if (auto downloads = systemDownloadsDirectory(); !downloads.empty())
+        {
+            return downloads / "accio";
+        }
+
+        return fs::current_path() / "Downloads" / "accio";
+    }
+
+    bool resolveUploadsDirectory(const fs::path &candidateInput, fs::path &resolved, std::string &error)
+    {
+        if (candidateInput.empty())
+        {
+            error = "empty path";
+            return false;
+        }
+
+        fs::path candidate = candidateInput;
+        if (candidate.is_relative())
+        {
+            candidate = fs::current_path() / candidate;
+        }
+
+        std::error_code createEc;
+        fs::create_directories(candidate, createEc);
+        if (createEc)
+        {
+            std::error_code existsEc;
+            if (!fs::exists(candidate, existsEc))
+            {
+                error = createEc.message();
+                return false;
+            }
+
+            if (existsEc)
+            {
+                error = existsEc.message();
+                return false;
+            }
+        }
+
+        std::error_code statusEc;
+        auto status = fs::status(candidate, statusEc);
+        if (statusEc)
+        {
+            error = statusEc.message();
+            return false;
+        }
+
+        if (!fs::is_directory(status))
+        {
+            error = "path exists and is not a directory";
+            return false;
+        }
+
+        std::error_code canonicalEc;
+        const auto canonical = fs::weakly_canonical(candidate, canonicalEc);
+        if (canonicalEc)
+        {
+            error = canonicalEc.message();
+            return false;
+        }
+
+        resolved = canonical;
+        return true;
+    }
 } // namespace
 
-void Core::start(const std::string &path, const std::string &host, unsigned short port) const
+void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port) const
 {
     auto &app = drogon::app();
     app.addListener(host, port);
@@ -283,13 +526,21 @@ void Core::start(const std::string &path, const std::string &host, unsigned shor
         },
         {drogon::Get, drogon::Head});
 
-    const auto uploadsDir = baseDir / "uploads";
-    std::error_code createDirEc;
-    fs::create_directories(uploadsDir, createDirEc);
-    if (createDirEc)
+    const fs::path uploadsCandidate = uploadsPath.empty() ? defaultUploadsDirectory() : fs::path{uploadsPath};
+    fs::path uploadsDir;
+    std::string candidateError;
+    if (!resolveUploadsDirectory(uploadsCandidate, uploadsDir, candidateError))
     {
-        throw std::runtime_error("failed to prepare uploads directory: " + uploadsDir.string());
+        const fs::path fallbackUploads = baseDir / "accio";
+        std::string fallbackError;
+        if (!resolveUploadsDirectory(fallbackUploads, uploadsDir, fallbackError))
+        {
+            throw std::runtime_error(
+                "failed to prepare uploads directory. primary '" + uploadsCandidate.string() + "' (" + candidateError + ")"
+                + "; fallback '" + fallbackUploads.string() + "' (" + fallbackError + ")");
+        }
     }
+    std::cout << "Uploads directory: " << uploadsDir.string() << std::endl;
 
     app.registerHandler(
         "/upload",
