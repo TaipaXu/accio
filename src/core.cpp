@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <utility>
 #include <drogon/drogon.h>
+#include <drogon/MultiPart.h>
 #include <drogon/utils/Utilities.h>
 #include "indexHtml.hpp"
 
@@ -279,7 +280,97 @@ void Core::start(const std::string &path)
             resp->setBody(std::move(html));
             resp->setContentTypeCode(drogon::CT_TEXT_HTML);
             callback(resp);
-        });
+        },
+        {drogon::Get, drogon::Head});
+
+    const auto uploadsDir = baseDir / "uploads";
+    std::error_code createDirEc;
+    fs::create_directories(uploadsDir, createDirEc);
+    if (createDirEc)
+    {
+        throw std::runtime_error("failed to prepare uploads directory: " + uploadsDir.string());
+    }
+
+    app.registerHandler(
+        "/upload",
+        [uploadsDir](const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
+            drogon::MultiPartParser parser;
+            if (parser.parse(req) != 0)
+            {
+                callback(makePlainTextResponse(drogon::k400BadRequest, "Invalid multipart payload"));
+                return;
+            }
+
+            const auto &files = parser.getFiles();
+            if (files.empty())
+            {
+                callback(makePlainTextResponse(drogon::k400BadRequest, "No files provided"));
+                return;
+            }
+
+            std::vector<std::string> sanitizedNames;
+            sanitizedNames.reserve(files.size());
+            for (const auto &file : files)
+            {
+                std::string normalizedName = normalizeRelativePath(file.getFileName());
+                if (normalizedName.empty() || containsParentTraversal(normalizedName))
+                {
+                    callback(makePlainTextResponse(drogon::k400BadRequest, "Invalid file name"));
+                    return;
+                }
+
+                std::string sanitized = fs::path{normalizedName}.filename().string();
+                if (sanitized.empty() || sanitized == "." || sanitized == "..")
+                {
+                    callback(makePlainTextResponse(drogon::k400BadRequest, "Invalid file name"));
+                    return;
+                }
+
+                for (char &ch : sanitized)
+                {
+                    if (ch == '/' || ch == '\\')
+                    {
+                        ch = '_';
+                    }
+                }
+
+                sanitizedNames.push_back(std::move(sanitized));
+            }
+
+            std::vector<std::string> savedNames;
+            savedNames.reserve(files.size());
+            for (std::size_t i = 0; i < files.size(); ++i)
+            {
+                const fs::path baseDestination = uploadsDir / sanitizedNames[i];
+                fs::path destination = baseDestination;
+                std::size_t suffix = 1;
+                while (fs::exists(destination))
+                {
+                    const std::string stem = baseDestination.stem().string();
+                    const std::string extension = baseDestination.extension().string();
+                    destination = uploadsDir / (stem + "_" + std::to_string(suffix) + extension);
+                    ++suffix;
+                }
+
+                if (files[i].saveAs(destination.string()) != 0)
+                {
+                    callback(makePlainTextResponse(drogon::k500InternalServerError, "Failed to save file"));
+                    return;
+                }
+
+                savedNames.push_back(destination.filename().string());
+            }
+
+            std::string responseBody = "Uploaded files:\n";
+            for (const auto &name : savedNames)
+            {
+                responseBody += name;
+                responseBody.push_back('\n');
+            }
+
+            callback(makePlainTextResponse(drogon::k200OK, responseBody));
+        },
+        {drogon::Post});
 
     app.run();
 }
