@@ -176,10 +176,10 @@ namespace
     }
 } // namespace
 
-void Core::start(const std::string &path)
+void Core::start(const std::string &path, const std::string &host, unsigned short port) const
 {
     auto &app = drogon::app();
-    app.addListener("0.0.0.0", 8080);
+    app.addListener(host, port);
 
     std::error_code ec;
     fs::path baseCandidate = path.empty() ? fs::current_path() : fs::path{path};

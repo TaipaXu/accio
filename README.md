@@ -47,7 +47,7 @@ cmake --build build/release -j $(nproc)
 - `accio -v`: show the version string
 - `accio <path>`: start the HTTP server rooted at the given directory (defaults to the current directory when omitted)
 
-When the server is running, open `http://localhost:8080` in your browser to browse folders, upload files into the current view, and download any listed file.
+When the server is running, open `http://localhost:13396` in your browser to browse folders, upload files into the current view, and download any listed file.
 
 ## License
 

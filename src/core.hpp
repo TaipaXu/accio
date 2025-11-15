@@ -8,7 +8,7 @@ public:
     Core() = default;
     ~Core() = default;
 
-    void start(const std::string &path = {});
+    void start(const std::string &path, const std::string &host, unsigned short port) const;
 
 private:
 };
