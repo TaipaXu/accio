@@ -23,6 +23,15 @@ sudo apt update
 sudo apt install build-essential cmake
 ```
 
+### macOS
+
+安装 Xcode Command Line Tools，然后通过 [Homebrew](https://brew.sh) 安装 CMake 和 `pkg-config`，以便 vcpkg 能够正确检测 zlib 等依赖：
+
+```sh
+xcode-select --install
+brew install cmake pkg-config
+```
+
 ### Windows
 
 安装 [Visual Studio 2022](https://visualstudio.microsoft.com)，勾选“使用 C++ 的桌面开发”工作负载。确认 `cmake` 已在 `PATH` 中，并在 “x64 Native Tools Command Prompt for VS 2022” 或开发者 PowerShell 中执行构建命令，以便加载 MSVC 工具链。

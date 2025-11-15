@@ -23,6 +23,15 @@ sudo apt update
 sudo apt install build-essential cmake
 ```
 
+### macOS
+
+Install the Xcode Command Line Tools, then use [Homebrew](https://brew.sh) to install CMake and `pkg-config` so vcpkg can locate zlib and other dependencies:
+
+```sh
+xcode-select --install
+brew install cmake pkg-config
+```
+
 ### Windows
 
 Install [Visual Studio 2022](https://visualstudio.microsoft.com) with the "Desktop development with C++" workload. Ensure `cmake` is on your `PATH`, and run the build commands from the "x64 Native Tools Command Prompt for VS 2022" (or an equivalent developer PowerShell prompt) so the MSVC toolchain is configured.
