@@ -540,7 +540,11 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
                 + "; fallback '" + fallbackUploads.string() + "' (" + fallbackError + ")");
         }
     }
-    std::cout << "Uploads directory: " << uploadsDir.string() << std::endl;
+
+    const std::string uploadsDirStr = uploadsDir.string();
+    app.registerBeginningAdvice([uploadsDirStr, hostCopy = host, port]() {
+        Core::logStartupInfo(hostCopy, port, uploadsDirStr);
+    });
 
     app.registerHandler(
         "/upload",
@@ -624,4 +628,49 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         {drogon::Post});
 
     app.run();
+}
+
+void Core::logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir)
+{
+    const std::string listenerHost = host.empty() ? std::string{"0.0.0.0"} : host;
+    const bool needsBrackets = listenerHost.find(':') != std::string::npos && listenerHost.front() != '[';
+    const std::string webAddress = needsBrackets
+                                       ? ("http://[" + listenerHost + "]:" + std::to_string(port))
+                                       : ("http://" + listenerHost + ":" + std::to_string(port));
+    bool colorEnabled = true;
+#ifdef _WIN32
+    static const bool vtEnabled = []() {
+        const HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (stdOut == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+
+        DWORD mode = 0;
+        if (!GetConsoleMode(stdOut, &mode))
+        {
+            return false;
+        }
+
+        if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+        {
+            return true;
+        }
+
+        const DWORD updatedMode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        return SetConsoleMode(stdOut, updatedMode) != 0;
+    }();
+    colorEnabled = vtEnabled;
+#endif
+    std::cout << "Server started successfully!" << std::endl;
+    if (colorEnabled)
+    {
+        std::cout << "Web service: \033[32m" << webAddress << "\033[0m" << std::endl;
+    }
+    else
+    {
+        std::cout << "Web service: " << webAddress << std::endl;
+    }
+    std::cout << "Uploads directory: " << uploadsDir << std::endl;
+    std::cout << std::flush;
 }
