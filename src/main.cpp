@@ -42,13 +42,14 @@ int main(int argc, char *argv[])
     }
     else if (variablesMap.count("path"))
     {
-        std::string path = variablesMap["path"].as<std::string>();
+        const std::string path = variablesMap["path"].as<std::string>();
         Core core;
         core.start(path);
     }
     else
     {
-        std::cout << optionsDescription << std::endl;
+        Core core;
+        core.start();
     }
 
     return 0;
