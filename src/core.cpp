@@ -429,9 +429,9 @@ namespace
         return true;
     }
 
-    std::vector<std::string> collectNetworkAddresses()
+    std::vector<std::pair<std::string, int>> collectNetworkAddresses()
     {
-        std::vector<std::string> addresses;
+        std::vector<std::pair<std::string, int>> addresses;
 #ifdef _WIN32
         using GetAdaptersAddressesPtr = ULONG(WINAPI *)(ULONG, ULONG, PVOID, PIP_ADAPTER_ADDRESSES, PULONG);
         static const GetAdaptersAddressesPtr getAdaptersAddressesPtr = []() -> GetAdaptersAddressesPtr {
@@ -518,7 +518,7 @@ namespace
                     continue;
                 }
 
-                addresses.push_back(std::move(addr));
+                addresses.emplace_back(std::move(addr), family);
             }
         }
 #else
@@ -570,11 +570,20 @@ namespace
                 continue;
             }
 
-            addresses.push_back(std::move(addr));
+            addresses.emplace_back(std::move(addr), family);
         }
 #endif
-        std::sort(addresses.begin(), addresses.end());
-        addresses.erase(std::unique(addresses.begin(), addresses.end()), addresses.end());
+        std::sort(addresses.begin(), addresses.end(), [](const auto &lhs, const auto &rhs) {
+            if (lhs.second != rhs.second)
+            {
+                return lhs.second < rhs.second;
+            }
+            return lhs.first < rhs.first;
+        });
+        addresses.erase(std::unique(addresses.begin(), addresses.end(), [](const auto &lhs, const auto &rhs) {
+                            return lhs.second == rhs.second && lhs.first == rhs.first;
+                        }),
+                        addresses.end());
         return addresses;
     }
 } // namespace
@@ -864,6 +873,7 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
     };
 
     const bool bindsAll = listenerHost == "0.0.0.0" || listenerHost == "::";
+    const bool listensIpv6 = listenerHost.find(':') != std::string::npos && listenerHost != "0.0.0.0";
     std::vector<std::pair<std::string, std::string>> additionalEndpoints;
     std::unordered_set<std::string> seenUrls;
     seenUrls.insert(webAddress);
@@ -884,8 +894,16 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
             addEndpoint("Local:", "::1");
         }
 
-        for (const auto &addr : collectNetworkAddresses())
+        for (const auto &[addr, family] : collectNetworkAddresses())
         {
+            if (!listensIpv6 && family != AF_INET)
+            {
+                continue;
+            }
+            if (listensIpv6 && family != AF_INET6)
+            {
+                continue;
+            }
             addEndpoint("Network:", addr);
         }
     }
