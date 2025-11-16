@@ -591,6 +591,10 @@ namespace
 void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port) const
 {
     auto &app = drogon::app();
+    constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50 GB
+    constexpr std::size_t maxInMemoryBytes = 64ULL * 1024ULL * 1024ULL;          // 64 MB
+    app.setClientMaxBodySize(maxRequestBytes);
+    app.setClientMaxMemoryBodySize(maxInMemoryBytes);
     app.addListener(host, port);
 
     std::error_code ec;
