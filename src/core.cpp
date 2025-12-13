@@ -131,7 +131,7 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
             {
                 return lhs.isDirectory > rhs.isDirectory;
             }
-            return lhs.name < rhs.name;
+            return Core::caseInsensitiveLess(lhs.name, rhs.name);
         });
 
         std::string filesHtml;
@@ -610,4 +610,23 @@ bool Core::streamFileResponse(httplib::Response &response, const fs::path &fileP
         });
 
     return true;
+}
+
+bool Core::caseInsensitiveLess(const std::string &lhs, const std::string &rhs)
+{
+    const auto toLowerCopy = [](const std::string &text) {
+        std::string lower = text;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return lower;
+    };
+
+    const std::string lhsLower = toLowerCopy(lhs);
+    const std::string rhsLower = toLowerCopy(rhs);
+    if (lhsLower == rhsLower)
+    {
+        return lhs < rhs;
+    }
+    return lhsLower < rhsLower;
 }

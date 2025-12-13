@@ -27,6 +27,7 @@ private:
     static inline void setPlainTextResponse(httplib::Response &response, int status, std::string_view body);
     static std::string buildContentDispositionHeader(const std::string &filename);
     static bool streamFileResponse(httplib::Response &response, const std::filesystem::path &filePath);
+    static bool caseInsensitiveLess(const std::string &lhs, const std::string &rhs);
 
     std::mutex serverMutex;
     std::shared_ptr<httplib::Server> server;
