@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --buildsystem=cmake --parallel
+
+override_dh_auto_configure:
+	cmake --preset=ppa-release -DCMAKE_INSTALL_PREFIX=/usr
+
+override_dh_auto_build:
+	cmake --build build/release
+
+override_dh_auto_test:
+	echo "Skipping tests"
+
+override_dh_auto_install:
+	DESTDIR=$(CURDIR)/debian/$(shell dh_listpackages) cmake --install build/release

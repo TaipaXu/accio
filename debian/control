@@ -1,0 +1,15 @@
+Source: accio
+Section: utils
+Priority: optional
+Maintainer: Taipa Xu <taipaxu@gmail.com>
+Build-Depends: debhelper-compat (= 13), cmake, pkg-config, libboost-program-options-dev, libcpp-httplib-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/taipaxu/accio
+Vcs-Browser: https://github.com/taipaxu/accio
+Vcs-Git: https://github.com/taipaxu/accio.git
+Rules-Requires-Root: no
+
+Package: accio
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Drop-in file transfer server for local networks, offering a modern web UI for quick uploads and downloads.

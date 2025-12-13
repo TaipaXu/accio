@@ -1,0 +1,6 @@
+The Debian Package accio
+----------------------------
+
+To build the package, use:
+
+  debuild -S -d

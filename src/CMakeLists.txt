@@ -71,3 +71,5 @@ endif()
 if(WIN32)
     target_link_libraries(${TARGET} PRIVATE Shell32 Ole32)
 endif()
+
+install(TARGETS ${TARGET} RUNTIME DESTINATION bin)
