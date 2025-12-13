@@ -1,792 +1,311 @@
 #include "./core.hpp"
-#include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <unordered_set>
+#include <tuple>
+#include <utility>
+#include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <algorithm>
+#include <type_traits>
 #include <stdexcept>
 #include <system_error>
-#include <filesystem>
-#include <fstream>
-#include <utility>
-#include <cstdlib>
-#include <drogon/drogon.h>
-#include <drogon/MultiPart.h>
-#include <drogon/utils/Utilities.h>
+#include <httplib.h>
+#include "utils/file.hpp"
+#include "utils/network.hpp"
 #include "indexHtml.hpp"
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
 #include <windows.h>
-#include <shlobj.h>
-#include <knownfolders.h>
-#else
-#include <ifaddrs.h>
-#include <netdb.h>
-#include <net/if.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
 #endif
 
 namespace fs = std::filesystem;
 
 namespace
 {
-    std::string normalizeRelativePath(const std::string &path)
-    {
-        std::string sanitized = path;
-        std::replace(sanitized.begin(), sanitized.end(), '\\', '/');
-
-        fs::path normalized = fs::path{sanitized}.lexically_normal();
-
-        if (normalized.has_root_path())
-        {
-            normalized = normalized.relative_path();
-        }
-
-        const std::string generic = normalized.generic_string();
-        if (generic == ".")
-        {
-            return {};
-        }
-
-        return generic;
-    }
-
-    bool containsParentTraversal(const std::string &path)
-    {
-        for (const auto &part : fs::path{path}.lexically_normal())
-        {
-            if (part == "..")
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    bool isWithinBase(const fs::path &candidate, const fs::path &base)
-    {
-        std::error_code ec;
-        auto relativePath = fs::relative(candidate, base, ec);
-        if (ec)
-        {
-            return false;
-        }
-
-        for (const auto &part : relativePath)
-        {
-            if (part == "..")
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    std::string buildContentDispositionHeader(const std::string &filename)
-    {
-        std::string sanitized = filename;
-        for (char &ch : sanitized)
-        {
-            if (ch == '"' || ch == '\\')
-            {
-                ch = '_';
-            }
-        }
-
-        auto encoded = drogon::utils::urlEncode(filename);
-        std::string header = "attachment; filename=\"" + sanitized + "\"";
-        header += "; filename*=UTF-8''" + encoded;
-        return header;
-    }
-
-    std::string buildHrefForPath(const std::string &relativePath)
-    {
-        if (relativePath.empty())
-        {
-            return "/";
-        }
-
-        std::string href{"/"};
-        bool firstSegment = true;
-        for (const auto &segment : fs::path{relativePath})
-        {
-            auto segmentStr = segment.string();
-            if (segmentStr.empty())
-            {
-                continue;
-            }
-
-            if (!firstSegment)
-            {
-                href.push_back('/');
-            }
-
-            href += drogon::utils::urlEncode(segmentStr);
-            firstSegment = false;
-        }
-
-        if (firstSegment)
-        {
-            return "/";
-        }
-
-        return href;
-    }
-
-    std::string extractRelativePath(const drogon::HttpRequestPtr &req)
-    {
-        std::string requestPath = req->getParameter("path");
-        if (requestPath.empty())
-        {
-            requestPath = req->path();
-        }
-
-        requestPath = drogon::utils::urlDecode(requestPath);
-        return normalizeRelativePath(requestPath);
-    }
-
-    drogon::HttpResponsePtr makePlainTextResponse(drogon::HttpStatusCode status, std::string_view body)
-    {
-        auto resp = drogon::HttpResponse::newHttpResponse();
-        resp->setStatusCode(status);
-        resp->setContentTypeCode(drogon::CT_TEXT_PLAIN);
-        resp->setBody(std::string{body});
-        return resp;
-    }
-
-    std::string escapeForHtml(std::string_view text)
-    {
-        std::string escaped;
-        escaped.reserve(text.size());
-        for (char ch : text)
-        {
-            switch (ch)
-            {
-            case '&':
-                escaped += "&amp;";
-                break;
-            case '<':
-                escaped += "&lt;";
-                break;
-            case '>':
-                escaped += "&gt;";
-                break;
-            case '"':
-                escaped += "&quot;";
-                break;
-            case '\'':
-                escaped += "&#39;";
-                break;
-            default:
-                escaped.push_back(ch);
-                break;
-            }
-        }
-
-        return escaped;
-    }
-
-    fs::path getHomeDirectory()
-    {
-#ifdef _WIN32
-        if (const char *userProfile = std::getenv("USERPROFILE"))
-        {
-            if (*userProfile != '\0')
-            {
-                return fs::path{userProfile};
-            }
-        }
-
-        const char *homeDrive = std::getenv("HOMEDRIVE");
-        const char *homePath = std::getenv("HOMEPATH");
-        if (homeDrive && homePath)
-        {
-            return fs::path{std::string{homeDrive} + homePath};
-        }
-
-        if (const char *homeEnv = std::getenv("HOME"))
-        {
-            if (*homeEnv != '\0')
-            {
-                return fs::path{homeEnv};
-            }
-        }
+    // Detect httplib version at compile time.
+    // CPPHTTPLIB_VERSION_NUM was added in httplib 0.18.0 (2024).
+    // Old versions (< 0.18) only have CPPHTTPLIB_VERSION string.
+#ifdef CPPHTTPLIB_VERSION_NUM
+    // New httplib has StatusCode enum and FormData type
+    constexpr int HTTP_STATUS_OK = httplib::StatusCode::OK_200;
+    constexpr int HTTP_STATUS_BAD_REQUEST = httplib::StatusCode::BadRequest_400;
+    constexpr int HTTP_STATUS_FORBIDDEN = httplib::StatusCode::Forbidden_403;
+    constexpr int HTTP_STATUS_NOT_FOUND = httplib::StatusCode::NotFound_404;
+    constexpr int HTTP_STATUS_INTERNAL_SERVER_ERROR = httplib::StatusCode::InternalServerError_500;
+    using UploadPartType = httplib::FormData;
 #else
-        if (const char *homeEnv = std::getenv("HOME"))
-        {
-            if (*homeEnv != '\0')
-            {
-                return fs::path{homeEnv};
-            }
-        }
+    // Old httplib doesn't have StatusCode enum; uses MultipartFormData
+    constexpr int HTTP_STATUS_OK = 200;
+    constexpr int HTTP_STATUS_BAD_REQUEST = 400;
+    constexpr int HTTP_STATUS_FORBIDDEN = 403;
+    constexpr int HTTP_STATUS_NOT_FOUND = 404;
+    constexpr int HTTP_STATUS_INTERNAL_SERVER_ERROR = 500;
+    using UploadPartType = httplib::MultipartFormData;
 #endif
-        return {};
-    }
-
-    std::string stripQuotes(const std::string &text)
-    {
-        if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
-        {
-            return text.substr(1, text.size() - 2);
-        }
-        return text;
-    }
-
-    fs::path expandUserDirTemplate(const std::string &value, const fs::path &home)
-    {
-        if (value.empty())
-        {
-            return {};
-        }
-
-        std::string result;
-        result.reserve(value.size() + (home.empty() ? 0 : home.string().size()));
-
-        for (std::size_t i = 0; i < value.size(); ++i)
-        {
-            const char ch = value[i];
-
-            if (ch == '$' && value.compare(i, 5, "$HOME") == 0)
-            {
-                if (!home.empty())
-                {
-                    result += home.string();
-                }
-                i += 4;
-                continue;
-            }
-
-            if (ch == '~' && i == 0)
-            {
-                if (!home.empty())
-                {
-                    result += home.string();
-                }
-                continue;
-            }
-
-            if (ch == '\\' && i + 1 < value.size())
-            {
-                ++i;
-                result.push_back(value[i]);
-                continue;
-            }
-
-            result.push_back(ch);
-        }
-
-        return fs::path{result};
-    }
-
-    fs::path parseXdgDownloadDir(const fs::path &home)
-    {
-        const fs::path configPath = home / ".config" / "user-dirs.dirs";
-        std::ifstream in{configPath};
-        if (!in)
-        {
-            return {};
-        }
-
-        std::string line;
-        while (std::getline(in, line))
-        {
-            const auto commentPos = line.find('#');
-            if (commentPos != std::string::npos)
-            {
-                line.erase(commentPos);
-            }
-
-            const auto firstNotSpace = line.find_first_not_of(" \t");
-            if (firstNotSpace == std::string::npos)
-            {
-                continue;
-            }
-
-            constexpr std::string_view key = "XDG_DOWNLOAD_DIR=";
-            if (line.compare(firstNotSpace, key.size(), key) != 0)
-            {
-                continue;
-            }
-
-            std::string value = stripQuotes(line.substr(firstNotSpace + key.size()));
-            fs::path resolved = expandUserDirTemplate(value, home);
-            if (!resolved.empty())
-            {
-                return resolved;
-            }
-        }
-
-        return {};
-    }
-
-    fs::path systemDownloadsDirectory()
-    {
-#ifdef _WIN32
-        if (PWSTR downloadsWide = nullptr;
-            SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, KF_FLAG_DEFAULT, nullptr, &downloadsWide)))
-        {
-            fs::path resolved{std::wstring{downloadsWide}};
-            CoTaskMemFree(downloadsWide);
-            if (!resolved.empty())
-            {
-                return resolved;
-            }
-        }
-#endif
-
-        const fs::path home = getHomeDirectory();
-
-#if defined(__linux__) || defined(__unix__)
-        if (!home.empty())
-        {
-            if (auto xdg = parseXdgDownloadDir(home); !xdg.empty())
-            {
-                return xdg;
-            }
-        }
-#endif
-
-        if (!home.empty())
-        {
-            return home / "Downloads";
-        }
-
-        return {};
-    }
-
-    fs::path defaultUploadsDirectory()
-    {
-        if (auto downloads = systemDownloadsDirectory(); !downloads.empty())
-        {
-            return downloads / "accio";
-        }
-
-        return fs::current_path() / "Downloads" / "accio";
-    }
-
-    bool resolveUploadsDirectory(const fs::path &candidateInput, fs::path &resolved, std::string &error)
-    {
-        if (candidateInput.empty())
-        {
-            error = "empty path";
-            return false;
-        }
-
-        fs::path candidate = candidateInput;
-        if (candidate.is_relative())
-        {
-            candidate = fs::current_path() / candidate;
-        }
-
-        std::error_code createEc;
-        fs::create_directories(candidate, createEc);
-        if (createEc)
-        {
-            std::error_code existsEc;
-            if (!fs::exists(candidate, existsEc))
-            {
-                error = createEc.message();
-                return false;
-            }
-
-            if (existsEc)
-            {
-                error = existsEc.message();
-                return false;
-            }
-        }
-
-        std::error_code statusEc;
-        auto status = fs::status(candidate, statusEc);
-        if (statusEc)
-        {
-            error = statusEc.message();
-            return false;
-        }
-
-        if (!fs::is_directory(status))
-        {
-            error = "path exists and is not a directory";
-            return false;
-        }
-
-        std::error_code canonicalEc;
-        const auto canonical = fs::weakly_canonical(candidate, canonicalEc);
-        if (canonicalEc)
-        {
-            error = canonicalEc.message();
-            return false;
-        }
-
-        resolved = canonical;
-        return true;
-    }
-
-    std::vector<std::pair<std::string, int>> collectNetworkAddresses()
-    {
-        std::vector<std::pair<std::string, int>> addresses;
-#ifdef _WIN32
-        using GetAdaptersAddressesPtr = ULONG(WINAPI *)(ULONG, ULONG, PVOID, PIP_ADAPTER_ADDRESSES, PULONG);
-        static const GetAdaptersAddressesPtr getAdaptersAddressesPtr = []() -> GetAdaptersAddressesPtr {
-            if (HMODULE module = LoadLibraryA("iphlpapi.dll"))
-            {
-                return reinterpret_cast<GetAdaptersAddressesPtr>(GetProcAddress(module, "GetAdaptersAddresses"));
-            }
-            return nullptr;
-        }();
-
-        if (getAdaptersAddressesPtr == nullptr)
-        {
-            return addresses;
-        }
-
-        ULONG bufferLength = 0;
-        const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
-        ULONG result = getAdaptersAddressesPtr(AF_UNSPEC, flags, nullptr, nullptr, &bufferLength);
-        if (result == ERROR_NO_DATA)
-        {
-            return addresses;
-        }
-
-        if (result != ERROR_BUFFER_OVERFLOW)
-        {
-            return addresses;
-        }
-
-        std::vector<unsigned char> buffer(bufferLength);
-        auto *adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
-        result = getAdaptersAddressesPtr(AF_UNSPEC, flags, nullptr, adapters, &bufferLength);
-        if (result != NO_ERROR)
-        {
-            return addresses;
-        }
-
-        for (auto *adapter = adapters; adapter != nullptr; adapter = adapter->Next)
-        {
-            if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
-            {
-                continue;
-            }
-
-            for (auto *unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next)
-            {
-                const auto *sockAddr = unicast->Address.lpSockaddr;
-                if (sockAddr == nullptr)
-                {
-                    continue;
-                }
-
-                const int family = sockAddr->sa_family;
-                if (family != AF_INET && family != AF_INET6)
-                {
-                    continue;
-                }
-
-                char host[NI_MAXHOST] = {};
-                if (getnameinfo(sockAddr,
-                                static_cast<socklen_t>(unicast->Address.iSockaddrLength),
-                                host,
-                                sizeof(host),
-                                nullptr,
-                                0,
-                                NI_NUMERICHOST)
-                    != 0)
-                {
-                    continue;
-                }
-
-                std::string addr{host};
-                if (auto percent = addr.find('%'); percent != std::string::npos)
-                {
-                    addr.erase(percent);
-                }
-
-                if (addr == "127.0.0.1" || addr == "::1" || addr == "0.0.0.0" || addr == "::")
-                {
-                    continue;
-                }
-
-                if (family == AF_INET6 && addr.rfind("fe80", 0) == 0)
-                {
-                    continue;
-                }
-
-                addresses.emplace_back(std::move(addr), family);
-            }
-        }
-#else
-        ifaddrs *ifaddr = nullptr;
-        if (getifaddrs(&ifaddr) != 0)
-        {
-            return addresses;
-        }
-
-        std::unique_ptr<ifaddrs, decltype(&freeifaddrs)> guard{ifaddr, freeifaddrs};
-        for (auto *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
-        {
-            if (ifa->ifa_addr == nullptr)
-            {
-                continue;
-            }
-
-            const int family = ifa->ifa_addr->sa_family;
-            if (family != AF_INET && family != AF_INET6)
-            {
-                continue;
-            }
-
-            if ((ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0)
-            {
-                continue;
-            }
-
-            char host[NI_MAXHOST] = {};
-            const socklen_t addrLen = family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
-            if (getnameinfo(ifa->ifa_addr, addrLen, host, sizeof(host), nullptr, 0, NI_NUMERICHOST) != 0)
-            {
-                continue;
-            }
-
-            std::string addr{host};
-            if (auto percent = addr.find('%'); percent != std::string::npos)
-            {
-                addr.erase(percent);
-            }
-
-            if (addr == "0.0.0.0" || addr == "::" || addr == "127.0.0.1" || addr == "::1")
-            {
-                continue;
-            }
-
-            if (family == AF_INET6 && addr.rfind("fe80", 0) == 0)
-            {
-                continue;
-            }
-
-            addresses.emplace_back(std::move(addr), family);
-        }
-#endif
-        std::sort(addresses.begin(), addresses.end(), [](const auto &lhs, const auto &rhs) {
-            if (lhs.second != rhs.second)
-            {
-                return lhs.second < rhs.second;
-            }
-            return lhs.first < rhs.first;
-        });
-        addresses.erase(std::unique(addresses.begin(), addresses.end(), [](const auto &lhs, const auto &rhs) {
-                            return lhs.second == rhs.second && lhs.first == rhs.first;
-                        }),
-                        addresses.end());
-        return addresses;
-    }
 } // namespace
 
-void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port) const
+void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port)
 {
-    auto &app = drogon::app();
-    constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50 GB
-    constexpr std::size_t maxInMemoryBytes = 64ULL * 1024ULL * 1024ULL;          // 64 MB
-    app.setClientMaxBodySize(maxRequestBytes);
-    app.setClientMaxMemoryBodySize(maxInMemoryBytes);
-    app.addListener(host, port);
+    constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50GB
 
-    std::error_code ec;
-    fs::path baseCandidate = path.empty() ? fs::current_path() : fs::path{path};
+    auto httpServer = std::make_shared<httplib::Server>();
+    httpServer->set_payload_max_length(maxRequestBytes);
+
+    fs::path baseCandidate = path.empty() ? fs::current_path() : fs::path(path);
     if (baseCandidate.is_relative())
     {
         baseCandidate = fs::current_path() / baseCandidate;
     }
 
+    std::error_code ec;
     const auto baseDir = fs::weakly_canonical(baseCandidate, ec);
     if (ec || !fs::exists(baseDir) || !fs::is_directory(baseDir))
     {
         throw std::runtime_error("invalid base directory: " + baseCandidate.string());
     }
 
-    app.registerHandlerViaRegex(
-        "/.*",
-        [baseDir](const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
-            std::string relativePath = extractRelativePath(req);
-
-            if (containsParentTraversal(relativePath))
-            {
-                callback(makePlainTextResponse(drogon::k403Forbidden, "Forbidden path"));
-                return;
-            }
-
-            fs::path target = baseDir;
-            if (!relativePath.empty())
-            {
-                target /= fs::path{relativePath};
-            }
-
-            std::error_code ec;
-            const auto canonicalTarget = fs::weakly_canonical(target, ec);
-            if (ec || !fs::exists(canonicalTarget) || !isWithinBase(canonicalTarget, baseDir))
-            {
-                callback(makePlainTextResponse(drogon::k404NotFound, "Entry not found"));
-                return;
-            }
-
-            if (fs::is_regular_file(canonicalTarget))
-            {
-                auto resp = drogon::HttpResponse::newFileResponse(canonicalTarget.string());
-                resp->addHeader("Content-Disposition", buildContentDispositionHeader(canonicalTarget.filename().string()));
-                callback(resp);
-                return;
-            }
-
-            if (!fs::is_directory(canonicalTarget))
-            {
-                callback(makePlainTextResponse(drogon::k404NotFound, "Entry not found"));
-                return;
-            }
-
-            std::vector<std::pair<std::string, bool>> directoryEntries;
-            for (const auto &entry : fs::directory_iterator{canonicalTarget})
-            {
-                directoryEntries.emplace_back(entry.path().filename().string(), entry.is_directory());
-            }
-
-            std::sort(directoryEntries.begin(), directoryEntries.end(), [](const auto &lhs, const auto &rhs) {
-                if (lhs.second != rhs.second)
-                {
-                    return lhs.second > rhs.second;
-                }
-                return lhs.first < rhs.first;
-            });
-
-            std::string filesHtml;
-            filesHtml.reserve(128 + directoryEntries.size() * 64);
-            filesHtml += "<ul>\n";
-
-            if (!relativePath.empty())
-            {
-                const auto parentPath = fs::path{relativePath}.parent_path().generic_string();
-                const std::string href = buildHrefForPath(parentPath);
-                filesHtml += "<li><a href=\"" + href + "\">↩ ../</a></li>\n";
-            }
-
-            for (const auto &[filename, isDirectory] : directoryEntries)
-            {
-                const std::string childPath = relativePath.empty() ? filename : relativePath + "/" + filename;
-                const std::string href = buildHrefForPath(childPath);
-                const std::string displayName = isDirectory ? "📁 " + filename + "/" : filename;
-
-                filesHtml += "<li><a href=\"" + href + "\">" + escapeForHtml(displayName) + "</a></li>\n";
-            }
-
-            filesHtml += "</ul>\n";
-
-            std::string html = resources::index_html;
-            const std::string placeholder = "{{files}}";
-            if (auto pos = html.find(placeholder); pos != std::string::npos)
-            {
-                html.replace(pos, placeholder.size(), filesHtml);
-            }
-
-            auto resp = drogon::HttpResponse::newHttpResponse();
-            resp->setBody(std::move(html));
-            resp->setContentTypeCode(drogon::CT_TEXT_HTML);
-            callback(resp);
-        },
-        {drogon::Get, drogon::Head});
-
-    const fs::path uploadsCandidate = uploadsPath.empty() ? defaultUploadsDirectory() : fs::path{uploadsPath};
-    fs::path uploadsDir;
-    std::string candidateError;
-    if (!resolveUploadsDirectory(uploadsCandidate, uploadsDir, candidateError))
-    {
-        const fs::path fallbackUploads = baseDir / "accio";
-        std::string fallbackError;
-        if (!resolveUploadsDirectory(fallbackUploads, uploadsDir, fallbackError))
+    auto handleEntryRequest = [baseDir](const httplib::Request &request, httplib::Response &response) {
+        const std::string relativePath = Util::File::normalizeRelativePath(request.path);
+        fs::path target = baseDir;
+        if (!relativePath.empty())
         {
-            throw std::runtime_error(
-                "failed to prepare uploads directory. primary '" + uploadsCandidate.string() + "' (" + candidateError + ")"
-                + "; fallback '" + fallbackUploads.string() + "' (" + fallbackError + ")");
+            target /= fs::path{relativePath};
         }
-    }
 
-    const std::string uploadsDirStr = uploadsDir.string();
-    app.registerBeginningAdvice([uploadsDirStr, hostCopy = host, port]() {
-        Core::logStartupInfo(hostCopy, port, uploadsDirStr);
+        std::error_code ec;
+        const auto canonicalTarget = fs::weakly_canonical(target, ec);
+        if (ec || !fs::exists(canonicalTarget) || !Util::File::isWithinBase(canonicalTarget, baseDir))
+        {
+            setPlainTextResponse(response, HTTP_STATUS_NOT_FOUND, "Entry not found");
+            return;
+        }
+
+        if (fs::is_regular_file(canonicalTarget))
+        {
+            if (!Core::streamFileResponse(response, canonicalTarget))
+            {
+                setPlainTextResponse(response, HTTP_STATUS_INTERNAL_SERVER_ERROR, "Failed to read file");
+                return;
+            }
+
+            response.set_header("Content-Disposition", Core::buildContentDispositionHeader(canonicalTarget.filename().string()));
+            return;
+        }
+
+        if (!fs::is_directory(canonicalTarget))
+        {
+            setPlainTextResponse(response, HTTP_STATUS_NOT_FOUND, "Entry not found");
+            return;
+        }
+
+        // pair<name, isDirectory>
+        std::vector<std::pair<std::string, bool>> entries;
+        for (const auto &entry : fs::directory_iterator{canonicalTarget})
+        {
+            entries.emplace_back(entry.path().filename().string(), entry.is_directory());
+        }
+
+        std::sort(entries.begin(), entries.end(), [](const auto &lhs, const auto &rhs) {
+            if (lhs.second != rhs.second)
+            {
+                return lhs.second > rhs.second;
+            }
+            return lhs.first < rhs.first;
+        });
+
+        std::string filesHtml;
+        filesHtml += "<ul>\n";
+
+        if (!relativePath.empty())
+        {
+            const auto parentPath = fs::path(relativePath).parent_path().generic_string();
+            const std::string href = Util::File::buildHrefForPath(parentPath);
+            filesHtml += "<li><a href=\"" + href + "\">↩ ../</a></li>\n";
+        }
+
+        for (const auto &[filename, isDirectory] : entries)
+        {
+            const std::string childPath = relativePath.empty() ? filename : relativePath + "/" + filename;
+            const std::string href = Util::File::buildHrefForPath(childPath);
+            const std::string displayName = isDirectory ? "📁 " + filename + "/" : filename;
+
+            filesHtml += "<li><a href=\"" + href + "\">" + Util::File::escapeForHtml(displayName) + "</a></li>\n";
+        }
+
+        filesHtml += "</ul>\n";
+
+        std::string html = resources::index_html;
+        const std::string placeholder = "{{files}}";
+        if (auto pos = html.find(placeholder); pos != std::string::npos)
+        {
+            html.replace(pos, placeholder.size(), filesHtml);
+        }
+
+        response.set_content(std::move(html), "text/html");
+    };
+
+    httpServer->Get(R"(/.*)", handleEntryRequest);
+    httpServer->set_pre_routing_handler([handleEntryRequest](const httplib::Request &request, httplib::Response &response) {
+        if (request.method != "HEAD")
+        {
+            return httplib::Server::HandlerResponse::Unhandled;
+        }
+
+        handleEntryRequest(request, response);
+        response.body.clear();
+        return httplib::Server::HandlerResponse::Handled;
     });
 
-    app.registerHandler(
+    const bool userProvidedUploads = !uploadsPath.empty();
+    const fs::path fallbackUploads = baseDir / "accio";
+    const fs::path primaryUploads =
+        userProvidedUploads ? fs::path{uploadsPath} : Util::File::getDefaultUploadsDirectory(baseDir);
+
+    fs::path uploadsDir;
+    const auto primaryResult = Util::File::resolveUploadsDirectory(primaryUploads);
+    const bool primaryOk = std::get<0>(primaryResult);
+    const fs::path primaryResolved = std::get<1>(primaryResult);
+    const std::string primaryError = std::get<2>(primaryResult);
+
+    if (!primaryOk)
+    {
+        const bool needFallback = userProvidedUploads || primaryUploads != fallbackUploads;
+        if (!needFallback)
+        {
+            throw std::runtime_error(
+                "failed to prepare uploads directory '" + primaryUploads.string() + "' (" + primaryError + ")");
+        }
+
+        const auto fallbackResult = Util::File::resolveUploadsDirectory(fallbackUploads);
+        const bool fallbackOk = std::get<0>(fallbackResult);
+        fs::path fallbackResolved = std::get<1>(fallbackResult);
+        const std::string fallbackError = std::get<2>(fallbackResult);
+
+        if (!fallbackOk)
+        {
+            throw std::runtime_error(
+                "failed to prepare uploads directory. primary '" + primaryUploads.string() + "' (" + primaryError + ")"
+                + "; fallback '" + fallbackUploads.string() + "' (" + fallbackError + ")");
+        }
+
+        uploadsDir = std::move(fallbackResolved);
+    }
+    else
+    {
+        uploadsDir = std::move(primaryResolved);
+    }
+    const std::string uploadsDirStr = uploadsDir.string();
+
+    httpServer->Post(
         "/upload",
-        [uploadsDir](const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
-            drogon::MultiPartParser parser;
-            if (parser.parse(req) != 0)
+        [uploadsDir](const httplib::Request &request, httplib::Response &response, const httplib::ContentReader &content_reader) {
+            if (!request.is_multipart_form_data())
             {
-                callback(makePlainTextResponse(drogon::k400BadRequest, "Invalid multipart payload"));
+                setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "Invalid multipart payload");
                 return;
             }
 
-            const auto &files = parser.getFiles();
-            if (files.empty())
+            enum class UploadError
             {
-                callback(makePlainTextResponse(drogon::k400BadRequest, "No files provided"));
-                return;
-            }
+                None,
+                BadRequest,
+                Internal
+            };
 
-            std::vector<std::string> sanitizedNames;
-            sanitizedNames.reserve(files.size());
-            for (const auto &file : files)
-            {
-                std::string normalizedName = normalizeRelativePath(file.getFileName());
-                if (normalizedName.empty() || containsParentTraversal(normalizedName))
-                {
-                    callback(makePlainTextResponse(drogon::k400BadRequest, "Invalid file name"));
-                    return;
-                }
+            UploadError error = UploadError::None;
+            std::string errorMessage;
 
-                std::string sanitized = fs::path{normalizedName}.filename().string();
-                if (sanitized.empty() || sanitized == "." || sanitized == "..")
-                {
-                    callback(makePlainTextResponse(drogon::k400BadRequest, "Invalid file name"));
-                    return;
-                }
-
-                for (char &ch : sanitized)
-                {
-                    if (ch == '/' || ch == '\\')
-                    {
-                        ch = '_';
-                    }
-                }
-
-                sanitizedNames.push_back(std::move(sanitized));
-            }
-
+            std::ofstream currentFile;
+            bool currentIsFile = false;
+            bool hasFiles = false;
             std::vector<std::string> savedNames;
-            savedNames.reserve(files.size());
-            for (std::size_t i = 0; i < files.size(); ++i)
+
+            auto fail = [&](UploadError type, std::string message) {
+                if (error == UploadError::None)
+                {
+                    error = type;
+                    errorMessage = std::move(message);
+                }
+                return false;
+            };
+
+            auto closeCurrent = [&]() {
+                if (currentFile.is_open())
+                {
+                    currentFile.close();
+                }
+                currentIsFile = false;
+            };
+
+            bool ok = content_reader(
+                [&](const UploadPartType &file) {
+                    closeCurrent();
+                    const std::string fileName = file.filename;
+                    if (fileName.empty())
+                    {
+                        return true;
+                    }
+
+                    const auto [nameOk, sanitizedName] = Util::File::sanitizeUploadFilename(fileName);
+                    if (!nameOk)
+                    {
+                        return fail(UploadError::BadRequest, "Invalid file name");
+                    }
+
+                    auto [destinationOk, destination, destinationError] =
+                        Util::File::chooseUploadDestination(uploadsDir, sanitizedName);
+                    if (!destinationOk)
+                    {
+                        return fail(UploadError::Internal, destinationError.empty() ? "Failed to save file" : destinationError);
+                    }
+
+                    currentFile.open(destination, std::ios::binary);
+                    if (!currentFile)
+                    {
+                        return fail(UploadError::Internal, "Failed to save file");
+                    }
+
+                    currentIsFile = true;
+                    hasFiles = true;
+                    savedNames.push_back(destination.filename().string());
+                    return true;
+                },
+                [&](const char *data, size_t dataLength) {
+                    if (!currentIsFile)
+                    {
+                        return true;
+                    }
+
+                    currentFile.write(data, static_cast<std::streamsize>(dataLength));
+                    if (!currentFile)
+                    {
+                        return fail(UploadError::Internal, "Failed to save file");
+                    }
+                    return true;
+                });
+
+            closeCurrent();
+
+            if (!ok || error != UploadError::None)
             {
-                const fs::path baseDestination = uploadsDir / sanitizedNames[i];
-                fs::path destination = baseDestination;
-                std::size_t suffix = 1;
-                while (fs::exists(destination))
+                auto status = error == UploadError::BadRequest ? HTTP_STATUS_BAD_REQUEST : HTTP_STATUS_INTERNAL_SERVER_ERROR;
+                if (errorMessage.empty())
                 {
-                    const std::string stem = baseDestination.stem().string();
-                    const std::string extension = baseDestination.extension().string();
-                    destination = uploadsDir / (stem + "_" + std::to_string(suffix) + extension);
-                    ++suffix;
+                    errorMessage = "Upload failed";
                 }
+                setPlainTextResponse(response, status, errorMessage);
+                return;
+            }
 
-                if (files[i].saveAs(destination.string()) != 0)
-                {
-                    callback(makePlainTextResponse(drogon::k500InternalServerError, "Failed to save file"));
-                    return;
-                }
-
-                savedNames.push_back(destination.filename().string());
+            if (!hasFiles)
+            {
+                setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "No files provided");
+                return;
             }
 
             std::string responseBody = "Uploaded files:\n";
@@ -796,11 +315,55 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
                 responseBody.push_back('\n');
             }
 
-            callback(makePlainTextResponse(drogon::k200OK, responseBody));
-        },
-        {drogon::Post});
+            setPlainTextResponse(response, HTTP_STATUS_OK, responseBody);
+        });
 
-    app.run();
+    const std::string listenerHost = host.empty() ? std::string{"0.0.0.0"} : host;
+    unsigned short boundPort = port;
+    bool boundOk = false;
+    if (port == 0)
+    {
+        const auto dynamicPort = httpServer->bind_to_any_port(listenerHost.c_str());
+        boundOk = dynamicPort > 0;
+        boundPort = boundOk ? static_cast<unsigned short>(dynamicPort) : 0U;
+    }
+    else
+    {
+        boundOk = httpServer->bind_to_port(listenerHost.c_str(), static_cast<int>(port));
+    }
+
+    if (!boundOk)
+    {
+        throw std::runtime_error("failed to bind to " + listenerHost + ":" + std::to_string(port));
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(serverMutex);
+        this->server = httpServer;
+    }
+
+    logStartupInfo(listenerHost, boundPort, uploadsDirStr);
+
+    httpServer->listen_after_bind();
+
+    {
+        std::lock_guard<std::mutex> guard(serverMutex);
+        this->server.reset();
+    }
+}
+
+void Core::stop()
+{
+    std::shared_ptr<httplib::Server> runningServer;
+    {
+        std::lock_guard<std::mutex> guard(serverMutex);
+        runningServer = this->server;
+    }
+
+    if (runningServer)
+    {
+        runningServer->stop();
+    }
 }
 
 void Core::logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir)
@@ -844,38 +407,6 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
     colorEnabled = vtEnabled;
 #endif
 
-    const auto printLine = [colorEnabled](const std::string &label, const std::string &url) {
-        constexpr std::size_t labelWidth = 10U;
-        const std::string padding = label.size() < labelWidth ? std::string(labelWidth - label.size(), ' ') : "";
-
-        if (colorEnabled)
-        {
-            std::cout << "\033[34m" << label << "\033[0m";
-        }
-        else
-        {
-            std::cout << label;
-        }
-
-        if (!padding.empty())
-        {
-            std::cout << padding;
-        }
-        else
-        {
-            std::cout << ' ';
-        }
-
-        if (colorEnabled)
-        {
-            std::cout << "\033[32m" << url << "\033[0m" << std::endl;
-        }
-        else
-        {
-            std::cout << url << std::endl;
-        }
-    };
-
     const bool bindsAll = listenerHost == "0.0.0.0" || listenerHost == "::";
     const bool listensIpv6 = listenerHost.find(':') != std::string::npos && listenerHost != "0.0.0.0";
     std::vector<std::pair<std::string, std::string>> additionalEndpoints;
@@ -898,7 +429,7 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
             addEndpoint("Local:", "::1");
         }
 
-        for (const auto &[addr, family] : collectNetworkAddresses())
+        for (const auto &[addr, family] : Util::Network::collectNetworkAddresses())
         {
             if (!listensIpv6 && family != AF_INET)
             {
@@ -913,11 +444,149 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
     }
 
     std::cout << "Accio started successfully!" << std::endl;
-    printLine("Listening:", webAddress);
+    printLine(colorEnabled, "Listening:", webAddress);
     for (const auto &[label, url] : additionalEndpoints)
     {
-        printLine(label, url);
+        printLine(colorEnabled, label, url);
     }
-    printLine("Uploads:", uploadsDir);
+    printLine(colorEnabled, "Uploads:", uploadsDir);
+    if (colorEnabled)
+    {
+        std::cout << "Use \033[31mControl\033[0m+\033[31mC\033[0m to stop the server safely." << std::endl;
+    }
+    else
+    {
+        std::cout << "Use Control+C to stop the server safely." << std::endl;
+    }
     std::cout << std::flush;
+}
+
+void Core::printLine(bool colorEnabled, const std::string &label, const std::string &value)
+{
+    constexpr std::size_t labelWidth = 10U;
+    const std::string padding = label.size() < labelWidth ? std::string(labelWidth - label.size(), ' ') : "";
+
+    if (colorEnabled)
+    {
+        std::cout << "\033[34m" << label << "\033[0m";
+    }
+    else
+    {
+        std::cout << label;
+    }
+
+    if (!padding.empty())
+    {
+        std::cout << padding;
+    }
+    else
+    {
+        std::cout << ' ';
+    }
+
+    if (colorEnabled)
+    {
+        std::cout << "\033[32m" << value << "\033[0m" << std::endl;
+    }
+    else
+    {
+        std::cout << value << std::endl;
+    }
+}
+
+void Core::setPlainTextResponse(httplib::Response &response, int status, std::string_view body)
+{
+    response.status = status;
+    response.set_content(std::string{body}, "text/plain");
+}
+
+std::string Core::buildContentDispositionHeader(const std::string &filename)
+{
+    std::string sanitized = filename;
+    for (char &ch : sanitized)
+    {
+        if (ch == '"' || ch == '\\')
+        {
+            ch = '_';
+        }
+    }
+
+    const std::string encoded = Util::File::urlEncode(filename);
+    std::string header = "attachment; filename=\"" + sanitized + "\"";
+    header += "; filename*=UTF-8''" + encoded;
+    return header;
+}
+
+bool Core::streamFileResponse(httplib::Response &response, const fs::path &filePath)
+{
+    std::error_code ec;
+    const auto fileSize = fs::file_size(filePath, ec);
+    if (ec)
+    {
+        return false;
+    }
+
+    if (fileSize > static_cast<uintmax_t>(std::numeric_limits<std::size_t>::max()))
+    {
+        return false;
+    }
+
+    auto fileStream = std::make_shared<std::ifstream>(filePath, std::ios::binary);
+    if (!fileStream->is_open())
+    {
+        return false;
+    }
+
+    const std::size_t contentLength = static_cast<std::size_t>(fileSize);
+    response.set_content_provider(
+        contentLength,
+        "application/octet-stream",
+        [fileStream](std::size_t offset, std::size_t length, httplib::DataSink &sink) {
+            if (length == 0)
+            {
+                return true;
+            }
+
+            if (!fileStream->good())
+            {
+                fileStream->clear();
+            }
+
+            fileStream->seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+            if (!fileStream->good())
+            {
+                return false;
+            }
+
+            static constexpr std::size_t chunkSize = 64U * 1024U;
+            std::vector<char> buffer(chunkSize);
+            std::size_t remaining = length;
+            while (remaining > 0)
+            {
+                const std::size_t toRead = std::min(remaining, buffer.size());
+                fileStream->read(buffer.data(), static_cast<std::streamsize>(toRead));
+                const std::streamsize readBytes = fileStream->gcount();
+                if (readBytes <= 0)
+                {
+                    return false;
+                }
+
+                if (!sink.write(buffer.data(), static_cast<std::size_t>(readBytes)))
+                {
+                    return false;
+                }
+
+                remaining -= static_cast<std::size_t>(readBytes);
+            }
+
+            return true;
+        },
+        [fileStream](bool) {
+            if (fileStream->is_open())
+            {
+                fileStream->close();
+            }
+        });
+
+    return true;
 }

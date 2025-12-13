@@ -1,13 +1,44 @@
 #include <iostream>
 #include <string>
-#include <list>
-#include <numeric>
 #include <limits>
+#include <atomic>
 #include <stdexcept>
 #include <cstdlib>
+#include <csignal>
+#include <cstdio>
 #include <boost/program_options.hpp>
 #include "./config.hpp"
 #include "./core.hpp"
+
+namespace
+{
+    std::atomic_bool shutdownRequested = false;
+    Core *activeCore = nullptr;
+
+    void handleShutdownSignal(int)
+    {
+        if (shutdownRequested.exchange(true))
+        {
+            return;
+        }
+
+        std::cout << "\nCtrl+C detected, stopping server..." << std::endl;
+
+        if (activeCore)
+        {
+            activeCore->stop();
+        }
+    }
+
+    void installSignalHandlers(Core &core)
+    {
+        activeCore = &core;
+        std::signal(SIGINT, handleShutdownSignal);
+#ifdef SIGTERM
+        std::signal(SIGTERM, handleShutdownSignal);
+#endif
+    }
+} // namespace
 
 int main(int argc, char *argv[])
 {
@@ -131,7 +162,13 @@ int main(int argc, char *argv[])
         const auto port = static_cast<unsigned short>(portValue);
 
         Core core;
+        installSignalHandlers(core);
         core.start(path, uploadsPath, host, port);
+
+        if (shutdownRequested.load())
+        {
+            std::cout << "Shutdown complete. See you next time!" << std::endl;
+        }
     }
 
     return EXIT_SUCCESS;
