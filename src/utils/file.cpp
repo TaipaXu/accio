@@ -446,4 +446,48 @@ namespace Util::File
 
         return {true, canonical, {}};
     }
+
+    std::string formatFileSize(std::uintmax_t bytes)
+    {
+        constexpr std::uintmax_t KB = 1024;
+        constexpr std::uintmax_t MB = KB * 1024;
+        constexpr std::uintmax_t GB = MB * 1024;
+        constexpr std::uintmax_t TB = GB * 1024;
+
+        auto formatWithUnit = [](double value, const char *unit) {
+            std::ostringstream oss;
+            if (value < 10.0)
+            {
+                oss << std::fixed << std::setprecision(2);
+            }
+            else if (value < 100.0)
+            {
+                oss << std::fixed << std::setprecision(1);
+            }
+            else
+            {
+                oss << std::fixed << std::setprecision(0);
+            }
+            oss << value << ' ' << unit;
+            return oss.str();
+        };
+
+        if (bytes >= TB)
+        {
+            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(TB), "TB");
+        }
+        if (bytes >= GB)
+        {
+            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(GB), "GB");
+        }
+        if (bytes >= MB)
+        {
+            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(MB), "MB");
+        }
+        if (bytes >= KB)
+        {
+            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(KB), "KB");
+        }
+        return std::to_string(bytes) + " B";
+    }
 } // namespace Util::File

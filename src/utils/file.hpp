@@ -1,9 +1,10 @@
 #pragma once
 
-#include <filesystem>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <filesystem>
+#include <cstdint>
 
 namespace Util::File
 {
@@ -28,4 +29,6 @@ namespace Util::File
     fs::path getDefaultUploadsDirectory(const fs::path &baseDir);
 
     std::tuple<bool, fs::path, std::string> resolveUploadsDirectory(const fs::path &candidateInput);
+
+    std::string formatFileSize(std::uintmax_t bytes);
 } // namespace Util::File

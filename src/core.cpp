@@ -103,19 +103,35 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
             return;
         }
 
-        // pair<name, isDirectory>
-        std::vector<std::pair<std::string, bool>> entries;
+        struct Entry
+        {
+            std::string name;
+            bool isDirectory;
+            std::uintmax_t fileSize;
+        };
+
+        std::vector<Entry> entries;
         for (const auto &entry : fs::directory_iterator{canonicalTarget})
         {
-            entries.emplace_back(entry.path().filename().string(), entry.is_directory());
+            std::uintmax_t fileSize = 0;
+            if (entry.is_regular_file())
+            {
+                std::error_code sizeEc;
+                fileSize = entry.file_size(sizeEc);
+                if (sizeEc)
+                {
+                    fileSize = 0;
+                }
+            }
+            entries.push_back(Entry{entry.path().filename().string(), entry.is_directory(), fileSize});
         }
 
-        std::sort(entries.begin(), entries.end(), [](const auto &lhs, const auto &rhs) {
-            if (lhs.second != rhs.second)
+        std::sort(entries.begin(), entries.end(), [](const Entry &lhs, const Entry &rhs) {
+            if (lhs.isDirectory != rhs.isDirectory)
             {
-                return lhs.second > rhs.second;
+                return lhs.isDirectory > rhs.isDirectory;
             }
-            return lhs.first < rhs.first;
+            return lhs.name < rhs.name;
         });
 
         std::string filesHtml;
@@ -128,13 +144,18 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
             filesHtml += "<li><a href=\"" + href + "\">↩ ../</a></li>\n";
         }
 
-        for (const auto &[filename, isDirectory] : entries)
+        for (const auto &[filename, isDirectory, fileSize] : entries)
         {
             const std::string childPath = relativePath.empty() ? filename : relativePath + "/" + filename;
             const std::string href = Util::File::buildHrefForPath(childPath);
-            const std::string displayName = isDirectory ? "📁 " + filename + "/" : filename;
-
-            filesHtml += "<li><a href=\"" + href + "\">" + Util::File::escapeForHtml(displayName) + "</a></li>\n";
+            const std::string linkText = isDirectory ? "📁 " + filename + "/" : filename;
+            std::string line = "<li><a href=\"" + href + "\">" + Util::File::escapeForHtml(linkText) + "</a>";
+            if (!isDirectory)
+            {
+                line += " <span style=\"margin-left:10px;color:#888;\">[" + Util::File::formatFileSize(fileSize) + "]</span>";
+            }
+            line += "</li>\n";
+            filesHtml += line;
         }
 
         filesHtml += "</ul>\n";
