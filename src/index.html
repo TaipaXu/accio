@@ -6,6 +6,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Accio</title>
     <style>
+        :root {
+            --bg: #f6f7fb;
+            --text: #0f172a;
+            --muted: #475569;
+            --card: #ffffff;
+            --border: #d8dee9;
+            --accent: #2563eb;
+            --accent-contrast: #ffffff;
+        }
+
+        :root[data-theme="dark"] {
+            --bg: #0f172a;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --card: #111827;
+            --border: #1f2937;
+            --accent: #60a5fa;
+            --accent-contrast: #0b1220;
+        }
+
         html,
         body {
             margin: 0;
@@ -18,20 +38,99 @@
             justify-content: flex-start;
             height: 100vh;
             padding: 0 10px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 2px 8px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 22px;
+        }
+
+        .theme-toggle {
+            margin-left: auto;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text);
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--accent);
         }
 
         .files {
             flex: 1;
             overflow-y: auto;
+            margin-bottom: 10px;
             padding: 12px 16px 16px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
         }
 
         ul {
             padding-left: 12px;
+            color: var(--text);
+        }
+
+        .files li {
+            color: var(--text);
+        }
+
+        .files a {
+            color: var(--text);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .files a:hover {
+            color: var(--accent);
+            text-decoration: underline;
         }
 
         .upload_progress {
             display: none;
+        }
+
+        .upload {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 2px;
+        }
+
+        .upload__input {
+            color: var(--text);
+        }
+
+        .upload__submit {
+            padding: 8px 14px;
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            background: var(--accent);
+            color: var(--accent-contrast);
+            cursor: pointer;
+            transition: filter 0.15s ease, transform 0.15s ease;
+        }
+
+        .upload__submit:hover {
+            filter: brightness(1.05);
+        }
+
+        .upload__submit:active {
+            transform: translateY(1px);
         }
     </style>
 </head>
@@ -39,6 +138,7 @@
 <body>
     <header class="header">
         <h1>Accio</h1>
+        <button class="theme-toggle" type="button">Dark mode</button>
     </header>
     <div class="upload">
         <input class="upload__input" type="file" multiple>
@@ -50,11 +150,57 @@
     </div>
 
     <script>
+        const THEME_KEY = 'accio-theme';
+        const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+        const hasStoredTheme = () => localStorage.getItem(THEME_KEY) !== null;
+        const applyTheme = (theme) => {
+            document.documentElement.setAttribute('data-theme', theme);
+        };
+
+        const initTheme = () => {
+            const stored = localStorage.getItem(THEME_KEY);
+            if (stored === 'light' || stored === 'dark') {
+                applyTheme(stored);
+                return stored;
+            }
+            const system = themeMediaQuery.matches ? 'dark' : 'light';
+            applyTheme(system);
+            return system;
+        };
+
+        const $themeToggle = document.querySelector('.theme-toggle');
+        let currentTheme = initTheme();
+
+        const updateToggleLabel = () => {
+            $themeToggle.textContent = currentTheme === 'dark' ? 'Light mode' : 'Dark mode';
+        };
+
+        const setTheme = (theme) => {
+            currentTheme = theme;
+            applyTheme(theme);
+            localStorage.setItem(THEME_KEY, theme);
+            updateToggleLabel();
+        };
+
+        $themeToggle.addEventListener('click', () => {
+            setTheme(currentTheme === 'dark' ? 'light' : 'dark');
+        });
+
+        themeMediaQuery.addEventListener('change', (event) => {
+            if (!hasStoredTheme()) {
+                currentTheme = event.matches ? 'dark' : 'light';
+                applyTheme(currentTheme);
+                updateToggleLabel();
+            }
+        });
+
+        updateToggleLabel();
+
         const $uploadSubmitButton = document.querySelector('.upload__submit');
         $uploadSubmitButton.addEventListener('click', async () => {
             const $input = document.querySelector('.upload__input');
             const files = $input.files;
-            console.log(files);
             if (files.length === 0) {
                 alert('No files selected');
                 return;
