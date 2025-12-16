@@ -4,6 +4,8 @@
 #include <tuple>
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
