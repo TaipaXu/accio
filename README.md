@@ -4,6 +4,8 @@ Drop-in file transfer server for local networks, offering a modern web UI for qu
 
 English | [中文](./README_ZH.md)
 
+![accio](./accio.gif)
+
 ## Features
 
 - Zero-config startup with a single command-line entry point

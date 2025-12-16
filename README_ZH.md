@@ -4,6 +4,8 @@
 
 [English](./README.md) | 中文
 
+![accio](./accio.gif)
+
 ## 特性
 
 - 无需配置，一条命令即可启动共享目录
