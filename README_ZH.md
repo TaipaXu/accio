@@ -6,6 +6,31 @@
 
 ![accio](./accio.gif)
 
+## 安装
+
+### Ubuntu
+
+```sh
+sudo add-apt-repository ppa:taipa-xu/stable
+sudo apt update
+sudo apt install accio
+```
+
+#### Debian 包
+
+也可直接从 GitHub Releases 下载预构建的 `.deb` 安装包。请根据 Ubuntu 版本与架构选择对应文件，并使用 `sudo apt install ./<package-name>.deb` 进行安装。
+
+| Ubuntu 版本 | 架构 | 下载 |
+| ----------- | ---- | ---- |
+| 22.04       | amd64 | [accio_0.0.1-0ppa1.ubuntu22.04_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu22.04_amd64.deb) |
+| 22.04       | arm64 | [accio_0.0.1-0ppa1.ubuntu22.04_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu22.04_arm64.deb) |
+| 24.04       | amd64 | [accio_0.0.1-0ppa1.ubuntu24.04_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu24.04_amd64.deb) |
+| 24.04       | arm64 | [accio_0.0.1-0ppa1.ubuntu24.04_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu24.04_arm64.deb) |
+| 25.04       | amd64 | [accio_0.0.1-0ppa1.ubuntu25.04_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.04_amd64.deb) |
+| 25.04       | arm64 | [accio_0.0.1-0ppa1.ubuntu25.04_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.04_arm64.deb) |
+| 25.10       | amd64 | [accio_0.0.1-0ppa1.ubuntu25.10_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.10_amd64.deb) |
+| 25.10       | arm64 | [accio_0.0.1-0ppa1.ubuntu25.10_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.10_arm64.deb) |
+
 ## 特性
 
 - 无需配置，一条命令即可启动共享目录
