@@ -68,6 +68,13 @@ if(HTTPLIB_TARGETS)
     target_link_libraries(${TARGET} PRIVATE ${HTTPLIB_TARGETS})
 endif()
 
+if(APPLE)
+    target_link_libraries(${TARGET} PRIVATE "-framework CoreFoundation" "-framework CFNetwork")
+    if(ENABLE_TESTS)
+        target_link_libraries(accioCore PRIVATE "-framework CoreFoundation" "-framework CFNetwork")
+    endif()
+endif()
+
 if(WIN32)
     target_link_libraries(${TARGET} PRIVATE Shell32 Ole32)
 endif()
