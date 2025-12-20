@@ -24,6 +24,7 @@ English | [中文](./README_ZH.md)
 - `-u, --uploads <dir>`: set the uploads directory (defaults to `Downloads/accio` inside the shared root)
 - `--host <addr>`: listening host (default `0.0.0.0`)
 - `--port <number>`: listening port (default `13396`, use `0` for an ephemeral port)
+- `--password[=<value>]`: enable password protection; omit value to generate one. Default: no password.
 - `--enable-upload=<on|off>`: enable or disable uploads (default `on`; use `off` to disable the upload feature)
 
 Examples:

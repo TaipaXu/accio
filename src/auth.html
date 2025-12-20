@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Accio Authentication Required</title>
+</head>
+
+<body>
+    <script>
+        (async () => {
+            const ask = () => window.prompt('Enter access password');
+            const login = async (pw) => {
+                const res = await fetch('/auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: pw || ''
+                });
+                return res.ok;
+            };
+
+            while (true) {
+                const password = ask();
+                if (password === null) {
+                    continue;
+                }
+                try {
+                    if (await login(password)) {
+                        window.location.reload();
+                        return;
+                    }
+                } catch (e) {
+
+                }
+                alert('Incorrect password, try again.');
+            }
+        })();
+    </script>
+</body>
+
+</html>

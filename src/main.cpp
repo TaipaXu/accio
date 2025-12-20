@@ -52,6 +52,8 @@ int main(int argc, char *argv[])
         ("uploads,u", po::value<std::string>()->implicit_value(""), "Uploads directory path (default: Downloads/accio)") // uploads option
         ("host", po::value<std::string>()->implicit_value(""), "Server host (default: 0.0.0.0)")                         // host option
         ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)")                           // port option
+        ("password", po::value<std::string>()->implicit_value(""),
+         "Enable password; omit value to generate one, or pass a value to set it. Default: no password") // password option
         ("enable-upload", po::value<std::string>()->default_value("on")->implicit_value("on"),
          "Enable upload feature (on/off, default: on)");
 
@@ -164,11 +166,22 @@ int main(int argc, char *argv[])
 
         const auto port = static_cast<unsigned short>(portValue);
 
-        std::string enableUploadValue = "on";
+        bool passwordEnabled = variablesMap.count("password") != 0U;
+        std::string password;
+        if (passwordEnabled)
+        {
+            password = variablesMap["password"].as<std::string>();
+            if (password.empty())
+            {
+                password = Util::String::generateRandomString(12U);
+            }
+        }
+
+        std::string uploadsEnabledValue = "on";
         if (variablesMap.count("enable-upload"))
         {
-            enableUploadValue = variablesMap["enable-upload"].as<std::string>();
-            if (enableUploadValue.empty())
+            uploadsEnabledValue = variablesMap["enable-upload"].as<std::string>();
+            if (uploadsEnabledValue.empty())
             {
                 std::cerr << "Missing value for option '--enable-upload' (use 'on' or 'off')" << std::endl;
                 std::cerr << optionsDescription << std::endl;
@@ -176,27 +189,27 @@ int main(int argc, char *argv[])
             }
         }
 
-        const std::string enableUploadLower = Util::String::toLowerCopy(enableUploadValue);
+        const std::string uploadsEnabledLower = Util::String::toLowerCopy(uploadsEnabledValue);
 
-        bool enableUpload = false;
-        if (enableUploadLower == "on")
+        bool uploadsEnabled = false;
+        if (uploadsEnabledLower == "on")
         {
-            enableUpload = true;
+            uploadsEnabled = true;
         }
-        else if (enableUploadLower == "off")
+        else if (uploadsEnabledLower == "off")
         {
-            enableUpload = false;
+            uploadsEnabled = false;
         }
         else
         {
-            std::cerr << "Invalid value for '--enable-upload': " << enableUploadValue << " (expected 'on' or 'off')" << std::endl;
+            std::cerr << "Invalid value for '--enable-upload': " << uploadsEnabledValue << " (expected 'on' or 'off')" << std::endl;
             std::cerr << optionsDescription << std::endl;
             return EXIT_FAILURE;
         }
 
         Core core;
         installSignalHandlers(core);
-        core.start(path, uploadsPath, host, port, enableUpload);
+        core.start(path, uploadsPath, host, port, uploadsEnabled, password, passwordEnabled);
 
         if (shutdownRequested.load())
         {

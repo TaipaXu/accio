@@ -2,11 +2,15 @@
 
 namespace resources
 {
-    inline constexpr const char index_html[] = R"acc_idx(
+    inline constexpr const char authHtml[] = R"acc_auth(
+@AUTH_HTML_CONTENT@
+)acc_auth";
+
+    inline constexpr const char indexHtml[] = R"acc_idx(
 @INDEX_HTML_CONTENT@
 )acc_idx";
 
-    inline constexpr const char upload_html[] = R"acc_up(
+    inline constexpr const char uploadHtml[] = R"acc_up(
 @UPLOAD_HTML_CONTENT@
 )acc_up";
 } // namespace resources

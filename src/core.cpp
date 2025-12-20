@@ -35,6 +35,7 @@ namespace
     // New httplib has StatusCode enum and FormData type
     constexpr int HTTP_STATUS_OK = httplib::StatusCode::OK_200;
     constexpr int HTTP_STATUS_BAD_REQUEST = httplib::StatusCode::BadRequest_400;
+    constexpr int HTTP_STATUS_UNAUTHORIZED = httplib::StatusCode::Unauthorized_401;
     constexpr int HTTP_STATUS_FORBIDDEN = httplib::StatusCode::Forbidden_403;
     constexpr int HTTP_STATUS_NOT_FOUND = httplib::StatusCode::NotFound_404;
     constexpr int HTTP_STATUS_INTERNAL_SERVER_ERROR = httplib::StatusCode::InternalServerError_500;
@@ -43,6 +44,7 @@ namespace
     // Old httplib doesn't have StatusCode enum; uses MultipartFormData
     constexpr int HTTP_STATUS_OK = 200;
     constexpr int HTTP_STATUS_BAD_REQUEST = 400;
+    constexpr int HTTP_STATUS_UNAUTHORIZED = 401;
     constexpr int HTTP_STATUS_FORBIDDEN = 403;
     constexpr int HTTP_STATUS_NOT_FOUND = 404;
     constexpr int HTTP_STATUS_INTERNAL_SERVER_ERROR = 500;
@@ -50,14 +52,20 @@ namespace
 #endif
 } // namespace
 
-void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port, bool enableUploads)
+void Core::start(const std::string &path,
+                 const std::string &uploadsPath,
+                 const std::string &host,
+                 unsigned short port,
+                 bool uploadsEnabled,
+                 const std::string &password,
+                 bool passwordEnabled)
 {
     constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50GB
 
     auto httpServer = std::make_shared<httplib::Server>();
     httpServer->set_payload_max_length(maxRequestBytes);
 
-    const std::string uploadHtml = enableUploads ? std::string{resources::upload_html} : std::string{};
+    const std::string uploadHtml = uploadsEnabled ? std::string{resources::uploadHtml} : std::string{};
 
     fs::path baseCandidate = path.empty() ? fs::current_path() : fs::path(path);
     if (baseCandidate.is_relative())
@@ -71,6 +79,31 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
     {
         throw std::runtime_error("invalid base directory: " + baseCandidate.string());
     }
+
+    const bool authEnabled = passwordEnabled && !password.empty();
+
+    authRequired.store(authEnabled);
+    if (!authEnabled)
+    {
+        std::lock_guard<std::mutex> guard(authMutex);
+        authorizedIps.clear();
+    }
+
+    auto requireAuth = [this, authEnabled](const httplib::Request &request, httplib::Response &response) {
+        if (!authEnabled)
+        {
+            return true;
+        }
+
+        if (isAuthorized(request.remote_addr))
+        {
+            return true;
+        }
+
+        response.status = HTTP_STATUS_UNAUTHORIZED;
+        response.set_content(resources::authHtml, "text/html");
+        return false;
+    };
 
     auto handleEntryRequest = [baseDir, uploadHtml](const httplib::Request &request, httplib::Response &response) {
         const std::string relativePath = Util::File::normalizeRelativePath(request.path);
@@ -163,7 +196,7 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
 
         filesHtml += "</ul>\n";
 
-        std::string html = resources::index_html;
+        std::string html = resources::indexHtml;
         const std::string filesPlaceholder = "{{files}}";
         if (auto pos = html.find(filesPlaceholder); pos != std::string::npos)
         {
@@ -179,20 +212,50 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         response.set_content(std::move(html), "text/html");
     };
 
-    httpServer->Get(R"(/.*)", handleEntryRequest);
-    httpServer->set_pre_routing_handler([handleEntryRequest](const httplib::Request &request, httplib::Response &response) {
-        if (request.method != "HEAD")
+    httpServer->Post("/auth", [this, authEnabled, password](const httplib::Request &request, httplib::Response &response) {
+        if (!authEnabled)
         {
-            return httplib::Server::HandlerResponse::Unhandled;
+            setPlainTextResponse(response, HTTP_STATUS_OK, "Auth disabled");
+            return;
         }
 
+        const std::string provided = request.body;
+        if (provided == password)
+        {
+            authorizeIp(request.remote_addr);
+            setPlainTextResponse(response, HTTP_STATUS_OK, "OK");
+            return;
+        }
+
+        setPlainTextResponse(response, HTTP_STATUS_UNAUTHORIZED, "Unauthorized");
+    });
+
+    httpServer->Get(R"(/.*)", [requireAuth, handleEntryRequest](const httplib::Request &request, httplib::Response &response) {
+        if (!requireAuth(request, response))
+        {
+            return;
+        }
         handleEntryRequest(request, response);
-        response.body.clear();
-        return httplib::Server::HandlerResponse::Handled;
+    });
+
+    httpServer->set_pre_routing_handler([this, requireAuth, handleEntryRequest](const httplib::Request &request, httplib::Response &response) {
+        if (request.method == "HEAD")
+        {
+            if (!requireAuth(request, response))
+            {
+                return httplib::Server::HandlerResponse::Handled;
+            }
+
+            handleEntryRequest(request, response);
+            response.body.clear();
+            return httplib::Server::HandlerResponse::Handled;
+        }
+
+        return httplib::Server::HandlerResponse::Unhandled;
     });
 
     std::string uploadsDirStr = "disabled";
-    if (enableUploads)
+    if (uploadsEnabled)
     {
         const bool userProvidedUploads = !uploadsPath.empty();
         const fs::path fallbackUploads = baseDir / "accio";
@@ -376,7 +439,7 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         this->server = httpServer;
     }
 
-    logStartupInfo(listenerHost, boundPort, uploadsDirStr, enableUploads);
+    logStartupInfo(listenerHost, boundPort, uploadsDirStr, uploadsEnabled, password, authEnabled);
 
     httpServer->listen_after_bind();
 
@@ -400,7 +463,12 @@ void Core::stop()
     }
 }
 
-void Core::logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir, bool uploadsEnabled)
+void Core::logStartupInfo(const std::string &host,
+                          unsigned short port,
+                          const std::string &uploadsDir,
+                          bool uploadsEnabled,
+                          const std::string &password,
+                          bool passwordEnabled)
 {
     const std::string listenerHost = host.empty() ? std::string{"0.0.0.0"} : host;
     const auto formatUrl = [port](const std::string &address) {
@@ -489,8 +557,18 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
     }
     else
     {
-        printLine(colorEnabled, "Uploads:", "disabled");
+        printLine(colorEnabled, "Uploads:", "disabled", Color::Red);
     }
+
+    if (passwordEnabled)
+    {
+        printLine(colorEnabled, "Password:", password);
+    }
+    else
+    {
+        printLine(colorEnabled, "Auth:", "disabled", Color::Red);
+    }
+
     if (colorEnabled)
     {
         std::cout << "Use \033[31mControl\033[0m+\033[31mC\033[0m to stop the server safely." << std::endl;
@@ -502,7 +580,7 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
     std::cout << std::flush;
 }
 
-void Core::printLine(bool colorEnabled, const std::string &label, const std::string &value)
+void Core::printLine(bool colorEnabled, const std::string &label, const std::string &value, Color color)
 {
     constexpr std::size_t labelWidth = 10U;
     const std::string padding = label.size() < labelWidth ? std::string(labelWidth - label.size(), ' ') : "";
@@ -525,14 +603,37 @@ void Core::printLine(bool colorEnabled, const std::string &label, const std::str
         std::cout << ' ';
     }
 
+    const char *valuePrefix = "";
+    const char *valueSuffix = "";
     if (colorEnabled)
     {
-        std::cout << "\033[32m" << value << "\033[0m" << std::endl;
+        valuePrefix = (color == Color::Red) ? "\033[31m" : "\033[32m";
+        valueSuffix = "\033[0m";
     }
-    else
+
+    std::cout << valuePrefix << value << valueSuffix << std::endl;
+}
+
+bool Core::isAuthorized(const std::string &ip) const
+{
+    if (!authRequired.load())
     {
-        std::cout << value << std::endl;
+        return true;
     }
+
+    std::lock_guard<std::mutex> guard(authMutex);
+    return authorizedIps.find(ip) != authorizedIps.end();
+}
+
+void Core::authorizeIp(const std::string &ip)
+{
+    if (ip.empty())
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> guard(authMutex);
+    authorizedIps.insert(ip);
 }
 
 void Core::setPlainTextResponse(httplib::Response &response, int status, std::string_view body)
