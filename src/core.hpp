@@ -18,11 +18,11 @@ public:
     Core() = default;
     ~Core() = default;
 
-    void start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port);
+    void start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port, bool enableUploads);
     void stop();
 
 private:
-    static void logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir);
+    static void logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir, bool uploadsEnabled);
     static void printLine(bool colorEnabled, const std::string &label, const std::string &value);
     static inline void setPlainTextResponse(httplib::Response &response, int status, std::string_view body);
     static std::string buildContentDispositionHeader(const std::string &filename);

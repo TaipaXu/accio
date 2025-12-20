@@ -2,7 +2,11 @@
 
 namespace resources
 {
-    inline constexpr const char index_html[] = R"accio_index_html(
+    inline constexpr const char index_html[] = R"acc_idx(
 @INDEX_HTML_CONTENT@
-)accio_index_html";
-}
+)acc_idx";
+
+    inline constexpr const char upload_html[] = R"acc_up(
+@UPLOAD_HTML_CONTENT@
+)acc_up";
+} // namespace resources

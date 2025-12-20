@@ -1,0 +1,40 @@
+<div class="upload">
+    <input class="upload__input" type="file" multiple>
+    <button class="upload__submit">submit</button>
+    <progress class="upload_progress" max="100" style="margin-left: 20px;"></progress>
+</div>
+<script>
+    const $uploadSubmitButton = document.querySelector('.upload__submit');
+    $uploadSubmitButton.addEventListener('click', async () => {
+        const $input = document.querySelector('.upload__input');
+        const files = $input.files;
+        if (files.length === 0) {
+            alert('No files selected');
+            return;
+        }
+        const $progress = document.querySelector('.upload_progress');
+        $progress.style.display = 'inline';
+        const formData = new FormData();
+        for (let i = 0; i < files.length; i++) {
+            formData.append('file' + i, files[i]);
+        }
+        try {
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const message = await response.text();
+            if (!response.ok) {
+                const errorMessage = message.trim() || response.statusText || 'Upload failed';
+                alert(errorMessage);
+                return;
+            }
+            $input.value = '';
+            alert(message.trim() || 'Upload complete');
+        } catch (error) {
+            alert('Error uploading files');
+        } finally {
+            $progress.style.display = 'none';
+        }
+    });
+</script>

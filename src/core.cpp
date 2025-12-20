@@ -18,6 +18,7 @@
 #include <httplib.h>
 #include "utils/file.hpp"
 #include "utils/network.hpp"
+#include "utils/string.hpp"
 #include "indexHtml.hpp"
 #ifdef _WIN32
 #include <windows.h>
@@ -49,12 +50,14 @@ namespace
 #endif
 } // namespace
 
-void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port)
+void Core::start(const std::string &path, const std::string &uploadsPath, const std::string &host, unsigned short port, bool enableUploads)
 {
     constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50GB
 
     auto httpServer = std::make_shared<httplib::Server>();
     httpServer->set_payload_max_length(maxRequestBytes);
+
+    const std::string uploadHtml = enableUploads ? std::string{resources::upload_html} : std::string{};
 
     fs::path baseCandidate = path.empty() ? fs::current_path() : fs::path(path);
     if (baseCandidate.is_relative())
@@ -69,7 +72,7 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         throw std::runtime_error("invalid base directory: " + baseCandidate.string());
     }
 
-    auto handleEntryRequest = [baseDir](const httplib::Request &request, httplib::Response &response) {
+    auto handleEntryRequest = [baseDir, uploadHtml](const httplib::Request &request, httplib::Response &response) {
         const std::string relativePath = Util::File::normalizeRelativePath(request.path);
         fs::path target = baseDir;
         if (!relativePath.empty())
@@ -161,10 +164,16 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         filesHtml += "</ul>\n";
 
         std::string html = resources::index_html;
-        const std::string placeholder = "{{files}}";
-        if (auto pos = html.find(placeholder); pos != std::string::npos)
+        const std::string filesPlaceholder = "{{files}}";
+        if (auto pos = html.find(filesPlaceholder); pos != std::string::npos)
         {
-            html.replace(pos, placeholder.size(), filesHtml);
+            html.replace(pos, filesPlaceholder.size(), filesHtml);
+        }
+
+        const std::string uploadPlaceholder = "{{upload}}";
+        if (auto pos = html.find(uploadPlaceholder); pos != std::string::npos)
+        {
+            html.replace(pos, uploadPlaceholder.size(), uploadHtml);
         }
 
         response.set_content(std::move(html), "text/html");
@@ -182,162 +191,166 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         return httplib::Server::HandlerResponse::Handled;
     });
 
-    const bool userProvidedUploads = !uploadsPath.empty();
-    const fs::path fallbackUploads = baseDir / "accio";
-    const fs::path primaryUploads =
-        userProvidedUploads ? fs::path{uploadsPath} : Util::File::getDefaultUploadsDirectory(baseDir);
-
-    fs::path uploadsDir;
-    const auto primaryResult = Util::File::resolveUploadsDirectory(primaryUploads);
-    const bool primaryOk = std::get<0>(primaryResult);
-    const fs::path primaryResolved = std::get<1>(primaryResult);
-    const std::string primaryError = std::get<2>(primaryResult);
-
-    if (!primaryOk)
+    std::string uploadsDirStr = "disabled";
+    if (enableUploads)
     {
-        const bool needFallback = userProvidedUploads || primaryUploads != fallbackUploads;
-        if (!needFallback)
+        const bool userProvidedUploads = !uploadsPath.empty();
+        const fs::path fallbackUploads = baseDir / "accio";
+        const fs::path primaryUploads =
+            userProvidedUploads ? fs::path{uploadsPath} : Util::File::getDefaultUploadsDirectory(baseDir);
+
+        fs::path uploadsDir;
+        const auto primaryResult = Util::File::resolveUploadsDirectory(primaryUploads);
+        const bool primaryOk = std::get<0>(primaryResult);
+        const fs::path primaryResolved = std::get<1>(primaryResult);
+        const std::string primaryError = std::get<2>(primaryResult);
+
+        if (!primaryOk)
         {
-            throw std::runtime_error(
-                "failed to prepare uploads directory '" + primaryUploads.string() + "' (" + primaryError + ")");
+            const bool needFallback = userProvidedUploads || primaryUploads != fallbackUploads;
+            if (!needFallback)
+            {
+                throw std::runtime_error(
+                    "failed to prepare uploads directory '" + primaryUploads.string() + "' (" + primaryError + ")");
+            }
+
+            const auto fallbackResult = Util::File::resolveUploadsDirectory(fallbackUploads);
+            const bool fallbackOk = std::get<0>(fallbackResult);
+            fs::path fallbackResolved = std::get<1>(fallbackResult);
+            const std::string fallbackError = std::get<2>(fallbackResult);
+
+            if (!fallbackOk)
+            {
+                throw std::runtime_error(
+                    "failed to prepare uploads directory. primary '" + primaryUploads.string() + "' (" + primaryError + ")"
+                    + "; fallback '" + fallbackUploads.string() + "' (" + fallbackError + ")");
+            }
+
+            uploadsDir = std::move(fallbackResolved);
         }
-
-        const auto fallbackResult = Util::File::resolveUploadsDirectory(fallbackUploads);
-        const bool fallbackOk = std::get<0>(fallbackResult);
-        fs::path fallbackResolved = std::get<1>(fallbackResult);
-        const std::string fallbackError = std::get<2>(fallbackResult);
-
-        if (!fallbackOk)
+        else
         {
-            throw std::runtime_error(
-                "failed to prepare uploads directory. primary '" + primaryUploads.string() + "' (" + primaryError + ")"
-                + "; fallback '" + fallbackUploads.string() + "' (" + fallbackError + ")");
+            uploadsDir = std::move(primaryResolved);
         }
+        uploadsDirStr = uploadsDir.string();
 
-        uploadsDir = std::move(fallbackResolved);
-    }
-    else
-    {
-        uploadsDir = std::move(primaryResolved);
-    }
-    const std::string uploadsDirStr = uploadsDir.string();
-
-    httpServer->Post(
-        "/upload",
-        [uploadsDir](const httplib::Request &request, httplib::Response &response, const httplib::ContentReader &content_reader) {
-            if (!request.is_multipart_form_data())
-            {
-                setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "Invalid multipart payload");
-                return;
-            }
-
-            enum class UploadError
-            {
-                None,
-                BadRequest,
-                Internal
-            };
-
-            UploadError error = UploadError::None;
-            std::string errorMessage;
-
-            std::ofstream currentFile;
-            bool currentIsFile = false;
-            bool hasFiles = false;
-            std::vector<std::string> savedNames;
-
-            auto fail = [&](UploadError type, std::string message) {
-                if (error == UploadError::None)
+        httpServer->Post(
+            "/upload",
+            [uploadsDir](const httplib::Request &request, httplib::Response &response, const httplib::ContentReader &content_reader) {
+                if (!request.is_multipart_form_data())
                 {
-                    error = type;
-                    errorMessage = std::move(message);
+                    setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "Invalid multipart payload");
+                    return;
                 }
-                return false;
-            };
 
-            auto closeCurrent = [&]() {
-                if (currentFile.is_open())
+                enum class UploadError
                 {
-                    currentFile.close();
-                }
-                currentIsFile = false;
-            };
+                    None,
+                    BadRequest,
+                    Internal
+                };
 
-            bool ok = content_reader(
-                [&](const UploadPartType &file) {
-                    closeCurrent();
-                    const std::string fileName = file.filename;
-                    if (fileName.empty())
+                UploadError error = UploadError::None;
+                std::string errorMessage;
+
+                std::ofstream currentFile;
+                bool currentIsFile = false;
+                bool hasFiles = false;
+                std::vector<std::string> savedNames;
+
+                auto fail = [&](UploadError type, std::string message) {
+                    if (error == UploadError::None)
                     {
+                        error = type;
+                        errorMessage = std::move(message);
+                    }
+                    return false;
+                };
+
+                auto closeCurrent = [&]() {
+                    if (currentFile.is_open())
+                    {
+                        currentFile.close();
+                    }
+                    currentIsFile = false;
+                };
+
+                bool ok = content_reader(
+                    [&](const UploadPartType &file) {
+                        closeCurrent();
+                        const std::string fileName = file.filename;
+                        if (fileName.empty())
+                        {
+                            return true;
+                        }
+
+                        const auto [nameOk, sanitizedName] = Util::File::sanitizeUploadFilename(fileName);
+                        if (!nameOk)
+                        {
+                            return fail(UploadError::BadRequest, "Invalid file name");
+                        }
+
+                        auto [destinationOk, destination, destinationError] =
+                            Util::File::chooseUploadDestination(uploadsDir, sanitizedName);
+                        if (!destinationOk)
+                        {
+                            return fail(UploadError::Internal, destinationError.empty() ? "Failed to save file" : destinationError);
+                        }
+
+                        currentFile.open(destination, std::ios::binary);
+                        if (!currentFile)
+                        {
+                            return fail(UploadError::Internal, "Failed to save file");
+                        }
+
+                        currentIsFile = true;
+                        hasFiles = true;
+                        savedNames.push_back(destination.filename().string());
                         return true;
-                    }
+                    },
+                    [&](const char *data, size_t dataLength) {
+                        if (!currentIsFile)
+                        {
+                            return true;
+                        }
 
-                    const auto [nameOk, sanitizedName] = Util::File::sanitizeUploadFilename(fileName);
-                    if (!nameOk)
-                    {
-                        return fail(UploadError::BadRequest, "Invalid file name");
-                    }
-
-                    auto [destinationOk, destination, destinationError] =
-                        Util::File::chooseUploadDestination(uploadsDir, sanitizedName);
-                    if (!destinationOk)
-                    {
-                        return fail(UploadError::Internal, destinationError.empty() ? "Failed to save file" : destinationError);
-                    }
-
-                    currentFile.open(destination, std::ios::binary);
-                    if (!currentFile)
-                    {
-                        return fail(UploadError::Internal, "Failed to save file");
-                    }
-
-                    currentIsFile = true;
-                    hasFiles = true;
-                    savedNames.push_back(destination.filename().string());
-                    return true;
-                },
-                [&](const char *data, size_t dataLength) {
-                    if (!currentIsFile)
-                    {
+                        currentFile.write(data, static_cast<std::streamsize>(dataLength));
+                        if (!currentFile)
+                        {
+                            return fail(UploadError::Internal, "Failed to save file");
+                        }
                         return true;
-                    }
+                    });
 
-                    currentFile.write(data, static_cast<std::streamsize>(dataLength));
-                    if (!currentFile)
-                    {
-                        return fail(UploadError::Internal, "Failed to save file");
-                    }
-                    return true;
-                });
+                closeCurrent();
 
-            closeCurrent();
-
-            if (!ok || error != UploadError::None)
-            {
-                auto status = error == UploadError::BadRequest ? HTTP_STATUS_BAD_REQUEST : HTTP_STATUS_INTERNAL_SERVER_ERROR;
-                if (errorMessage.empty())
+                if (!ok || error != UploadError::None)
                 {
-                    errorMessage = "Upload failed";
+                    auto status = error == UploadError::BadRequest ? HTTP_STATUS_BAD_REQUEST : HTTP_STATUS_INTERNAL_SERVER_ERROR;
+                    if (errorMessage.empty())
+                    {
+                        errorMessage = "Upload failed";
+                    }
+                    setPlainTextResponse(response, status, errorMessage);
+                    return;
                 }
-                setPlainTextResponse(response, status, errorMessage);
-                return;
-            }
 
-            if (!hasFiles)
-            {
-                setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "No files provided");
-                return;
-            }
+                if (!hasFiles)
+                {
+                    setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "No files provided");
+                    return;
+                }
 
-            std::string responseBody = "Uploaded files:\n";
-            for (const auto &name : savedNames)
-            {
-                responseBody += name;
-                responseBody.push_back('\n');
-            }
+                std::string responseBody = "Uploaded files:\n";
+                for (const auto &name : savedNames)
+                {
+                    responseBody += name;
+                    responseBody.push_back('\n');
+                }
 
-            setPlainTextResponse(response, HTTP_STATUS_OK, responseBody);
-        });
+                setPlainTextResponse(response, HTTP_STATUS_OK, responseBody);
+            });
+    }
 
     const std::string listenerHost = host.empty() ? std::string{"0.0.0.0"} : host;
     unsigned short boundPort = port;
@@ -363,7 +376,7 @@ void Core::start(const std::string &path, const std::string &uploadsPath, const 
         this->server = httpServer;
     }
 
-    logStartupInfo(listenerHost, boundPort, uploadsDirStr);
+    logStartupInfo(listenerHost, boundPort, uploadsDirStr, enableUploads);
 
     httpServer->listen_after_bind();
 
@@ -387,7 +400,7 @@ void Core::stop()
     }
 }
 
-void Core::logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir)
+void Core::logStartupInfo(const std::string &host, unsigned short port, const std::string &uploadsDir, bool uploadsEnabled)
 {
     const std::string listenerHost = host.empty() ? std::string{"0.0.0.0"} : host;
     const auto formatUrl = [port](const std::string &address) {
@@ -470,7 +483,14 @@ void Core::logStartupInfo(const std::string &host, unsigned short port, const st
     {
         printLine(colorEnabled, label, url);
     }
-    printLine(colorEnabled, "Uploads:", uploadsDir);
+    if (uploadsEnabled)
+    {
+        printLine(colorEnabled, "Uploads:", uploadsDir);
+    }
+    else
+    {
+        printLine(colorEnabled, "Uploads:", "disabled");
+    }
     if (colorEnabled)
     {
         std::cout << "Use \033[31mControl\033[0m+\033[31mC\033[0m to stop the server safely." << std::endl;
@@ -614,16 +634,8 @@ bool Core::streamFileResponse(httplib::Response &response, const fs::path &fileP
 
 bool Core::caseInsensitiveLess(const std::string &lhs, const std::string &rhs)
 {
-    const auto toLowerCopy = [](const std::string &text) {
-        std::string lower = text;
-        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        return lower;
-    };
-
-    const std::string lhsLower = toLowerCopy(lhs);
-    const std::string rhsLower = toLowerCopy(rhs);
+    const std::string lhsLower = Util::String::toLowerCopy(lhs);
+    const std::string rhsLower = Util::String::toLowerCopy(rhs);
     if (lhsLower == rhsLower)
     {
         return lhs < rhs;

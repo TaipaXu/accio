@@ -9,6 +9,7 @@
 #include <boost/program_options.hpp>
 #include "./config.hpp"
 #include "./core.hpp"
+#include "utils/string.hpp"
 
 namespace
 {
@@ -50,7 +51,9 @@ int main(int argc, char *argv[])
         ("path,p", po::value<std::string>()->implicit_value(""), "Current directory path")                               // path option
         ("uploads,u", po::value<std::string>()->implicit_value(""), "Uploads directory path (default: Downloads/accio)") // uploads option
         ("host", po::value<std::string>()->implicit_value(""), "Server host (default: 0.0.0.0)")                         // host option
-        ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)");                          // port option
+        ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)")                           // port option
+        ("enable-upload", po::value<std::string>()->default_value("on")->implicit_value("on"),
+         "Enable upload feature (on/off, default: on)");
 
     po::positional_options_description positionalOptionsDescription;
     positionalOptionsDescription.add("path", -1);
@@ -161,9 +164,39 @@ int main(int argc, char *argv[])
 
         const auto port = static_cast<unsigned short>(portValue);
 
+        std::string enableUploadValue = "on";
+        if (variablesMap.count("enable-upload"))
+        {
+            enableUploadValue = variablesMap["enable-upload"].as<std::string>();
+            if (enableUploadValue.empty())
+            {
+                std::cerr << "Missing value for option '--enable-upload' (use 'on' or 'off')" << std::endl;
+                std::cerr << optionsDescription << std::endl;
+                return EXIT_FAILURE;
+            }
+        }
+
+        const std::string enableUploadLower = Util::String::toLowerCopy(enableUploadValue);
+
+        bool enableUpload = false;
+        if (enableUploadLower == "on")
+        {
+            enableUpload = true;
+        }
+        else if (enableUploadLower == "off")
+        {
+            enableUpload = false;
+        }
+        else
+        {
+            std::cerr << "Invalid value for '--enable-upload': " << enableUploadValue << " (expected 'on' or 'off')" << std::endl;
+            std::cerr << optionsDescription << std::endl;
+            return EXIT_FAILURE;
+        }
+
         Core core;
         installSignalHandlers(core);
-        core.start(path, uploadsPath, host, port);
+        core.start(path, uploadsPath, host, port, enableUpload);
 
         if (shutdownRequested.load())
         {

@@ -6,36 +6,30 @@
 
 ![accio](./accio.gif)
 
-## 安装
-
-### Ubuntu
-
-```sh
-sudo add-apt-repository ppa:taipa-xu/stable
-sudo apt update
-sudo apt install accio
-```
-
-#### Debian 包
-
-也可直接从 GitHub Releases 下载预构建的 `.deb` 安装包。请根据 Ubuntu 版本与架构选择对应文件，并使用 `sudo apt install ./<package-name>.deb` 进行安装。
-
-| Ubuntu 版本 | 架构 | 下载 |
-| ----------- | ---- | ---- |
-| 22.04       | amd64 | [accio_0.0.1-0ppa1.ubuntu22.04_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu22.04_amd64.deb) |
-| 22.04       | arm64 | [accio_0.0.1-0ppa1.ubuntu22.04_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu22.04_arm64.deb) |
-| 24.04       | amd64 | [accio_0.0.1-0ppa1.ubuntu24.04_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu24.04_amd64.deb) |
-| 24.04       | arm64 | [accio_0.0.1-0ppa1.ubuntu24.04_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu24.04_arm64.deb) |
-| 25.04       | amd64 | [accio_0.0.1-0ppa1.ubuntu25.04_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.04_amd64.deb) |
-| 25.04       | arm64 | [accio_0.0.1-0ppa1.ubuntu25.04_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.04_arm64.deb) |
-| 25.10       | amd64 | [accio_0.0.1-0ppa1.ubuntu25.10_amd64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.10_amd64.deb) |
-| 25.10       | arm64 | [accio_0.0.1-0ppa1.ubuntu25.10_arm64.deb](https://github.com/TaipaXu/accio/releases/download/v0.0.1/accio_0.0.1-0ppa1.ubuntu25.10_arm64.deb) |
-
 ## 特性
 
 - 无需配置，一条命令即可启动共享目录
 - 网页端可视化浏览目录，支持文件上传与下载
 - 路径规范化校验，确保访问受限在共享目录之内
+
+## 使用方法
+
+```sh
+./build/release/src/accio <共享目录>
+```
+
+- `-h, --help`：查看所有命令行参数
+- `-v, --version`：显示版本信息
+- `-p, --path <目录>`：设置共享根目录（未指定时默认当前目录）
+- `-u, --uploads <目录>`：指定上传文件存放目录（默认使用共享目录下的 `Downloads/accio`）
+- `--host <地址>`：监听地址（默认 `0.0.0.0`）
+- `--port <端口>`：监听端口（默认 `13396`，传入 `0` 可使用系统分配端口）
+- `--enable-upload=<on|off>`：开启或关闭上传功能（默认 `on`；传 `off` 关闭上传功能）
+
+示例：
+
+- 共享当前目录：`accio`
+- 共享 `/data/shared` 并关闭上传功能：`accio -p /data/shared --enable-upload=off`
 
 ## 依赖
 
@@ -72,18 +66,6 @@ vcpkg install
 cmake --preset=unix-release
 cmake --build build/release -j $(nproc)
 ```
-
-## 使用方法
-
-```sh
-./build/release/src/accio <共享目录>
-```
-
-- `accio -h`：查看命令行参数
-- `accio -v`：显示版本信息
-- `accio <路径>`：以给定目录为根启动 HTTP 服务（未指定时默认使用当前目录）
-
-服务启动后，浏览器打开 `http://localhost:13396` 即可在线浏览文件夹、上传新文件并下载所需内容。
 
 ## 协议
 
