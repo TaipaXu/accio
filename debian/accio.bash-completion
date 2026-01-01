@@ -1,0 +1,37 @@
+_accio() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts="--help -h --version -v --path -p --uploads -u --host --port --password --enable-upload --allow-exts --allow-files --deny-exts --deny-files"
+
+    case "${prev}" in
+        --path|-p|--uploads|-u)
+            COMPREPLY=( $(compgen -d -- "${cur}") )
+            return 0
+            ;;
+        --allow-exts|--deny-exts)
+            COMPREPLY=( $(compgen -W ".txt .pdf .png .jpg .zip .tar.gz" -- "${cur}") )
+            return 0
+            ;;
+        --allow-files|--deny-files)
+            COMPREPLY=( $(compgen -f -- "${cur}") )
+            return 0
+            ;;
+        --enable-upload)
+            COMPREPLY=( $(compgen -W "on off" -- "${cur}") )
+            return 0
+            ;;
+    esac
+
+    if [[ ${COMP_CWORD} -eq 1 && "${cur}" != -* ]]; then
+        COMPREPLY=( $(compgen -d -- "${cur}") )
+        return 0
+    fi
+
+    if [[ "${cur}" == -* ]]; then
+        COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+    fi
+}
+
+complete -F _accio accio
