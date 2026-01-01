@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 #include <tuple>
 #include <filesystem>
 #include <cstdint>
@@ -31,4 +32,6 @@ namespace Util::File
     std::tuple<bool, fs::path, std::string> resolveUploadsDirectory(const fs::path &candidateInput);
 
     std::string formatFileSize(std::uintmax_t bytes);
+
+    bool hasAbsolutePaths(const std::vector<std::string> &items);
 } // namespace Util::File

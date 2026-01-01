@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <filesystem>
 #include <unordered_set>
 
@@ -33,7 +34,11 @@ public:
                unsigned short port,
                bool uploadsEnabled,
                const std::string &password,
-               bool passwordEnabled);
+               bool passwordEnabled,
+               const std::vector<std::string> &allowedExtensions = {},
+               const std::vector<std::string> &deniedExtensions = {},
+               const std::vector<std::string> &allowedFiles = {},
+               const std::vector<std::string> &deniedFiles = {});
     void stop();
 
 private:
@@ -50,6 +55,31 @@ private:
     static std::string buildContentDispositionHeader(const std::string &filename);
     static bool streamFileResponse(httplib::Response &response, const std::filesystem::path &filePath);
     static bool caseInsensitiveLess(const std::string &lhs, const std::string &rhs);
+    static std::unordered_set<std::string> normalizeExtensions(const std::vector<std::string> &extensions);
+    static void resolveDeniedPaths(const std::vector<std::string> &items,
+                                   const std::filesystem::path &baseDir,
+                                   std::unordered_set<std::string> &outFiles,
+                                   std::vector<std::filesystem::path> &outDirs);
+    static void resolveAllowedPaths(const std::vector<std::string> &items,
+                                    const std::filesystem::path &baseDir,
+                                    std::unordered_set<std::string> &outFiles,
+                                    std::vector<std::filesystem::path> &outDirs,
+                                    std::unordered_set<std::string> &outAncestors);
+    static bool isInList(const std::filesystem::path &canonicalPath,
+                         const std::unordered_set<std::string> &fileSet,
+                         const std::vector<std::filesystem::path> &dirList);
+    static bool isEntryAccessible(const std::filesystem::path &canonicalPath,
+                                  bool isDirectory,
+                                  const std::unordered_set<std::string> &allowedFiles,
+                                  const std::vector<std::filesystem::path> &allowedDirs,
+                                  const std::unordered_set<std::string> &allowedAncestors,
+                                  const std::unordered_set<std::string> &deniedFiles,
+                                  const std::vector<std::filesystem::path> &deniedDirs,
+                                  const std::unordered_set<std::string> &normalizedAllowedExts,
+                                  const std::unordered_set<std::string> &normalizedDeniedExts,
+                                  bool hasAllowedExt,
+                                  bool hasDeniedExt,
+                                  bool hasAllowedFiles);
 
 private:
     std::atomic_bool authRequired{false};

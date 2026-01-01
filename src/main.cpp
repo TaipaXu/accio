@@ -1,15 +1,18 @@
 #include <iostream>
 #include <string>
+#include <vector>
 #include <limits>
 #include <atomic>
 #include <stdexcept>
 #include <cstdlib>
 #include <csignal>
 #include <cstdio>
+#include <filesystem>
 #include <boost/program_options.hpp>
 #include "./config.hpp"
 #include "./core.hpp"
 #include "utils/string.hpp"
+#include "utils/file.hpp"
 
 namespace
 {
@@ -46,16 +49,21 @@ int main(int argc, char *argv[])
     namespace po = boost::program_options;
 
     po::options_description optionsDescription("Allowed options");
-    optionsDescription.add_options()("help,h", "Show help message")                                                      // help option
-        ("version,v", "Show version information")                                                                        // version option
-        ("path,p", po::value<std::string>()->implicit_value(""), "Current directory path")                               // path option
-        ("uploads,u", po::value<std::string>()->implicit_value(""), "Uploads directory path (default: Downloads/accio)") // uploads option
-        ("host", po::value<std::string>()->implicit_value(""), "Server host (default: 0.0.0.0)")                         // host option
-        ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)")                           // port option
+    optionsDescription.add_options()("help,h", "Show help message")                        // help option
+        ("version,v", "Show version information")                                          // version option
+        ("path,p", po::value<std::string>()->implicit_value(""), "Current directory path") // path option
+        ("uploads,u", po::value<std::string>()->implicit_value(""),
+         "Uploads directory path (default: Downloads/accio)")                                    // uploads option
+        ("host", po::value<std::string>()->implicit_value(""), "Server host (default: 0.0.0.0)") // host option
+        ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)")   // port option
         ("password", po::value<std::string>()->implicit_value(""),
-         "Enable password; omit value to generate one, or pass a value to set it. Default: no password") // password option
-        ("enable-upload", po::value<std::string>()->default_value("on")->implicit_value("on"),
-         "Enable upload feature (on/off, default: on)");
+         "Enable password; omit value to generate one, or pass a value to set it. Default: no password")                                                             // password option
+        ("enable-upload", po::value<std::string>()->default_value("on")->implicit_value("on"), "Enable upload feature (on/off, default: on)")                        // enable-upload option
+        ("allow-exts", po::value<std::vector<std::string>>()->multitoken(), "Allowed file extensions (e.g., --allow-exts .txt .pdf)")                                // allow-exts option
+        ("allow-files", po::value<std::vector<std::string>>()->multitoken(), "Allowed specific files (relative paths, e.g., --allow-files secret.txt sub/notes.md)") // allow-files option
+        ("deny-exts", po::value<std::vector<std::string>>()->multitoken(), "Denied file extensions (e.g., --deny-exts .exe .dll)")                                   // deny-exts option
+        ("deny-files", po::value<std::vector<std::string>>()->multitoken(), "Denied specific files (relative paths, e.g., --deny-files secret.txt tmp/a.bin)")       // deny-files option
+        ;
 
     po::positional_options_description positionalOptionsDescription;
     positionalOptionsDescription.add("path", -1);
@@ -164,7 +172,7 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-        const auto port = static_cast<unsigned short>(portValue);
+        const unsigned short port = static_cast<unsigned short>(portValue);
 
         bool passwordEnabled = variablesMap.count("password") != 0U;
         std::string password;
@@ -207,9 +215,52 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
+        std::vector<std::string> allowedExtensions;
+        if (variablesMap.count("allow-exts"))
+        {
+            allowedExtensions = variablesMap["allow-exts"].as<std::vector<std::string>>();
+        }
+
+        std::vector<std::string> allowedFiles;
+        if (variablesMap.count("allow-files"))
+        {
+            allowedFiles = variablesMap["allow-files"].as<std::vector<std::string>>();
+        }
+
+        std::vector<std::string> deniedExtensions;
+        if (variablesMap.count("deny-exts"))
+        {
+            deniedExtensions = variablesMap["deny-exts"].as<std::vector<std::string>>();
+        }
+
+        std::vector<std::string> deniedFiles;
+        if (variablesMap.count("deny-files"))
+        {
+            deniedFiles = variablesMap["deny-files"].as<std::vector<std::string>>();
+        }
+
+        if (Util::File::hasAbsolutePaths(allowedFiles))
+        {
+            std::cerr << "--allow-files only accepts relative paths" << std::endl;
+            return EXIT_FAILURE;
+        }
+
+        if (Util::File::hasAbsolutePaths(deniedFiles))
+        {
+            std::cerr << "--deny-files only accepts relative paths" << std::endl;
+            return EXIT_FAILURE;
+        }
+
+        if (!allowedExtensions.empty() && !deniedExtensions.empty())
+        {
+            std::cerr << "--allow-exts and --deny-exts cannot be used together" << std::endl;
+            return EXIT_FAILURE;
+        }
+
         Core core;
         installSignalHandlers(core);
-        core.start(path, uploadsPath, host, port, uploadsEnabled, password, passwordEnabled);
+        core.start(path, uploadsPath, host, port, uploadsEnabled, password, passwordEnabled,
+                   allowedExtensions, deniedExtensions, allowedFiles, deniedFiles);
 
         if (shutdownRequested.load())
         {

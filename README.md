@@ -26,6 +26,12 @@ English | [中文](./README_ZH.md)
 - `--port <number>`: listening port (default `13396`, use `0` for an ephemeral port)
 - `--password[=<value>]`: enable password protection; omit value to generate one. Default: no password.
 - `--enable-upload=<on|off>`: enable or disable uploads (default `on`; use `off` to disable the upload feature)
+- `--allow-exts <ext...>`: allow only these extensions (e.g., `.txt .pdf`); cannot be combined with `--deny-exts`
+- `--allow-files <path...>`: allowlisted files (relative to the shared root); can be combined with `--allow-exts` or deny options
+- `--deny-exts <ext...>`: block these extensions; cannot be combined with `--allow-exts`
+- `--deny-files <path...>`: blocklisted files (relative to the shared root); can be combined with `--deny-exts` or allow options
+
+Filtering priority: `deny-files` > `allow-files` > `deny-exts` > `allow-exts`. File paths for allow/deny lists must be relative to the shared root.
 
 Examples:
 

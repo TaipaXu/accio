@@ -125,13 +125,13 @@ namespace Util::File
             std::string line;
             while (std::getline(in, line))
             {
-                const auto commentPos = line.find('#');
+                const std::size_t commentPos = line.find('#');
                 if (commentPos != std::string::npos)
                 {
                     line.erase(commentPos);
                 }
 
-                const auto firstNotSpace = line.find_first_not_of(" \t");
+                const std::size_t firstNotSpace = line.find_first_not_of(" \t");
                 if (firstNotSpace == std::string::npos)
                 {
                     continue;
@@ -305,7 +305,7 @@ namespace Util::File
     bool isWithinBase(const fs::path &candidate, const fs::path &base)
     {
         std::error_code ec;
-        auto relativePath = fs::relative(candidate, base, ec);
+        std::filesystem::path relativePath = fs::relative(candidate, base, ec);
         if (ec)
         {
             return false;
@@ -333,7 +333,7 @@ namespace Util::File
         bool firstSegment = true;
         for (const auto &segment : fs::path{relativePath})
         {
-            auto segmentStr = segment.string();
+            std::string segmentStr = segment.string();
             if (segmentStr.empty())
             {
                 continue;
@@ -390,7 +390,7 @@ namespace Util::File
 
     fs::path getDefaultUploadsDirectory(const fs::path &baseDir)
     {
-        if (auto downloads = getSystemDownloadsDirectory(); !downloads.empty())
+        if (std::filesystem::path downloads = getSystemDownloadsDirectory(); !downloads.empty())
         {
             return downloads / "accio";
         }
@@ -428,7 +428,7 @@ namespace Util::File
         }
 
         std::error_code statusEc;
-        auto status = fs::status(candidate, statusEc);
+        std::filesystem::file_status status = fs::status(candidate, statusEc);
         if (statusEc)
         {
             return {false, {}, statusEc.message()};
@@ -440,7 +440,7 @@ namespace Util::File
         }
 
         std::error_code canonicalEc;
-        const auto canonical = fs::weakly_canonical(candidate, canonicalEc);
+        const std::filesystem::path canonical = fs::weakly_canonical(candidate, canonicalEc);
         if (canonicalEc)
         {
             return {false, {}, canonicalEc.message()};
@@ -491,5 +491,17 @@ namespace Util::File
             return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(KB), "KB");
         }
         return std::to_string(bytes) + " B";
+    }
+
+    bool hasAbsolutePaths(const std::vector<std::string> &items)
+    {
+        for (const auto &v : items)
+        {
+            if (fs::path(v).is_absolute())
+            {
+                return true;
+            }
+        }
+        return false;
     }
 } // namespace Util::File

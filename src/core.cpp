@@ -58,7 +58,11 @@ void Core::start(const std::string &path,
                  unsigned short port,
                  bool uploadsEnabled,
                  const std::string &password,
-                 bool passwordEnabled)
+                 bool passwordEnabled,
+                 const std::vector<std::string> &allowedExtensions,
+                 const std::vector<std::string> &deniedExtensions,
+                 const std::vector<std::string> &allowedFiles,
+                 const std::vector<std::string> &deniedFiles)
 {
     constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50GB
 
@@ -74,11 +78,42 @@ void Core::start(const std::string &path,
     }
 
     std::error_code ec;
-    const auto baseDir = fs::weakly_canonical(baseCandidate, ec);
+    const std::filesystem::path baseDir = fs::weakly_canonical(baseCandidate, ec);
     if (ec || !fs::exists(baseDir) || !fs::is_directory(baseDir))
     {
         throw std::runtime_error("invalid base directory: " + baseCandidate.string());
     }
+
+    const std::unordered_set<std::string> normalizedAllowedExtensions = Core::normalizeExtensions(allowedExtensions);
+    const std::unordered_set<std::string> normalizedDeniedExtensions = Core::normalizeExtensions(deniedExtensions);
+
+    std::unordered_set<std::string> normalizedAllowedFiles;
+    std::vector<fs::path> normalizedAllowedDirs;
+    std::unordered_set<std::string> normalizedAllowedAncestors;
+    Core::resolveAllowedPaths(allowedFiles, baseDir, normalizedAllowedFiles, normalizedAllowedDirs, normalizedAllowedAncestors);
+
+    std::unordered_set<std::string> normalizedDeniedFiles;
+    std::vector<fs::path> normalizedDeniedDirs;
+    Core::resolveDeniedPaths(deniedFiles, baseDir, normalizedDeniedFiles, normalizedDeniedDirs);
+
+    const bool hasAllowedExt = !normalizedAllowedExtensions.empty();
+    const bool hasDeniedExt = !normalizedDeniedExtensions.empty();
+    const bool hasAllowedFiles = !normalizedAllowedFiles.empty() || !normalizedAllowedDirs.empty();
+
+    const auto isEntryAccessible = [&](const fs::path &canonicalPath, bool isDirectory) {
+        return Core::isEntryAccessible(canonicalPath,
+                                       isDirectory,
+                                       normalizedAllowedFiles,
+                                       normalizedAllowedDirs,
+                                       normalizedAllowedAncestors,
+                                       normalizedDeniedFiles,
+                                       normalizedDeniedDirs,
+                                       normalizedAllowedExtensions,
+                                       normalizedDeniedExtensions,
+                                       hasAllowedExt,
+                                       hasDeniedExt,
+                                       hasAllowedFiles);
+    };
 
     const bool authEnabled = passwordEnabled && !password.empty();
 
@@ -105,7 +140,7 @@ void Core::start(const std::string &path,
         return false;
     };
 
-    auto handleEntryRequest = [baseDir, uploadHtml](const httplib::Request &request, httplib::Response &response) {
+    auto handleEntryRequest = [baseDir, uploadHtml, isEntryAccessible](const httplib::Request &request, httplib::Response &response) {
         const std::string relativePath = Util::File::normalizeRelativePath(request.path);
         fs::path target = baseDir;
         if (!relativePath.empty())
@@ -114,14 +149,23 @@ void Core::start(const std::string &path,
         }
 
         std::error_code ec;
-        const auto canonicalTarget = fs::weakly_canonical(target, ec);
+        const std::filesystem::path canonicalTarget = fs::weakly_canonical(target, ec);
         if (ec || !fs::exists(canonicalTarget) || !Util::File::isWithinBase(canonicalTarget, baseDir))
         {
             setPlainTextResponse(response, HTTP_STATUS_NOT_FOUND, "Entry not found");
             return;
         }
 
-        if (fs::is_regular_file(canonicalTarget))
+        const bool targetIsDirectory = fs::is_directory(canonicalTarget);
+        const bool targetIsFile = fs::is_regular_file(canonicalTarget);
+
+        if (!isEntryAccessible(canonicalTarget, targetIsDirectory))
+        {
+            setPlainTextResponse(response, HTTP_STATUS_FORBIDDEN, "Access denied");
+            return;
+        }
+
+        if (targetIsFile)
         {
             if (!Core::streamFileResponse(response, canonicalTarget))
             {
@@ -133,7 +177,7 @@ void Core::start(const std::string &path,
             return;
         }
 
-        if (!fs::is_directory(canonicalTarget))
+        if (!targetIsDirectory)
         {
             setPlainTextResponse(response, HTTP_STATUS_NOT_FOUND, "Entry not found");
             return;
@@ -149,6 +193,20 @@ void Core::start(const std::string &path,
         std::vector<Entry> entries;
         for (const auto &entry : fs::directory_iterator{canonicalTarget})
         {
+            const bool entryIsDirectory = entry.is_directory();
+
+            std::error_code childEc;
+            const std::filesystem::path entryCanonical = fs::weakly_canonical(entry.path(), childEc);
+            if (childEc)
+            {
+                continue;
+            }
+
+            if (!isEntryAccessible(entryCanonical, entryIsDirectory))
+            {
+                continue;
+            }
+
             std::uintmax_t fileSize = 0;
             if (entry.is_regular_file())
             {
@@ -175,7 +233,7 @@ void Core::start(const std::string &path,
 
         if (!relativePath.empty())
         {
-            const auto parentPath = fs::path(relativePath).parent_path().generic_string();
+            const std::string parentPath = fs::path(relativePath).parent_path().generic_string();
             const std::string href = Util::File::buildHrefForPath(parentPath);
             filesHtml += "<li><a href=\"" + href + "\">↩ ../</a></li>\n";
         }
@@ -198,13 +256,13 @@ void Core::start(const std::string &path,
 
         std::string html = resources::indexHtml;
         const std::string filesPlaceholder = "{{files}}";
-        if (auto pos = html.find(filesPlaceholder); pos != std::string::npos)
+        if (std::size_t pos = html.find(filesPlaceholder); pos != std::string::npos)
         {
             html.replace(pos, filesPlaceholder.size(), filesHtml);
         }
 
         const std::string uploadPlaceholder = "{{upload}}";
-        if (auto pos = html.find(uploadPlaceholder); pos != std::string::npos)
+        if (std::size_t pos = html.find(uploadPlaceholder); pos != std::string::npos)
         {
             html.replace(pos, uploadPlaceholder.size(), uploadHtml);
         }
@@ -389,7 +447,7 @@ void Core::start(const std::string &path,
 
                 if (!ok || error != UploadError::None)
                 {
-                    auto status = error == UploadError::BadRequest ? HTTP_STATUS_BAD_REQUEST : HTTP_STATUS_INTERNAL_SERVER_ERROR;
+                    int status = error == UploadError::BadRequest ? HTTP_STATUS_BAD_REQUEST : HTTP_STATUS_INTERNAL_SERVER_ERROR;
                     if (errorMessage.empty())
                     {
                         errorMessage = "Upload failed";
@@ -420,7 +478,7 @@ void Core::start(const std::string &path,
     bool boundOk = false;
     if (port == 0)
     {
-        const auto dynamicPort = httpServer->bind_to_any_port(listenerHost.c_str());
+        const int dynamicPort = httpServer->bind_to_any_port(listenerHost.c_str());
         boundOk = dynamicPort > 0;
         boundPort = boundOk ? static_cast<unsigned short>(dynamicPort) : 0U;
     }
@@ -662,7 +720,7 @@ std::string Core::buildContentDispositionHeader(const std::string &filename)
 bool Core::streamFileResponse(httplib::Response &response, const fs::path &filePath)
 {
     std::error_code ec;
-    const auto fileSize = fs::file_size(filePath, ec);
+    const uintmax_t fileSize = fs::file_size(filePath, ec);
     if (ec)
     {
         return false;
@@ -742,4 +800,152 @@ bool Core::caseInsensitiveLess(const std::string &lhs, const std::string &rhs)
         return lhs < rhs;
     }
     return lhsLower < rhsLower;
+}
+
+std::unordered_set<std::string> Core::normalizeExtensions(const std::vector<std::string> &extensions)
+{
+    std::unordered_set<std::string> result;
+    for (const auto &ext : extensions)
+    {
+        std::string normalized = ext;
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(), ::tolower);
+        if (!normalized.empty() && normalized[0] != '.')
+        {
+            normalized = "." + normalized;
+        }
+        result.insert(normalized);
+    }
+    return result;
+}
+
+void Core::resolveDeniedPaths(const std::vector<std::string> &items,
+                              const fs::path &baseDir,
+                              std::unordered_set<std::string> &outFiles,
+                              std::vector<fs::path> &outDirs)
+{
+    for (const auto &pathStr : items)
+    {
+        fs::path candidate{baseDir / fs::path{pathStr}};
+        std::error_code fileEc;
+        const std::filesystem::path canonicalPath = fs::weakly_canonical(candidate, fileEc);
+        if (fileEc)
+        {
+            continue;
+        }
+
+        if (fs::is_directory(canonicalPath))
+        {
+            outDirs.push_back(canonicalPath);
+        }
+        else
+        {
+            outFiles.insert(canonicalPath.string());
+        }
+    }
+}
+
+void Core::resolveAllowedPaths(const std::vector<std::string> &items,
+                               const fs::path &baseDir,
+                               std::unordered_set<std::string> &outFiles,
+                               std::vector<fs::path> &outDirs,
+                               std::unordered_set<std::string> &outAncestors)
+{
+    Core::resolveDeniedPaths(items, baseDir, outFiles, outDirs);
+
+    for (const auto &pathStr : items)
+    {
+        fs::path candidate{baseDir / fs::path{pathStr}};
+        std::error_code fileEc;
+        const std::filesystem::path canonicalPath = fs::weakly_canonical(candidate, fileEc);
+        if (fileEc)
+        {
+            continue;
+        }
+
+        fs::path currentPath = canonicalPath;
+        while (true)
+        {
+            outAncestors.insert(currentPath.string());
+            if (currentPath == baseDir || !currentPath.has_parent_path())
+            {
+                break;
+            }
+            currentPath = currentPath.parent_path();
+        }
+    }
+}
+
+bool Core::isInList(const fs::path &canonicalPath,
+                    const std::unordered_set<std::string> &fileSet,
+                    const std::vector<fs::path> &dirList)
+{
+    if (!canonicalPath.empty() && fileSet.count(canonicalPath.string()))
+    {
+        return true;
+    }
+    for (const auto &dir : dirList)
+    {
+        if (Util::File::isWithinBase(canonicalPath, dir))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Core::isEntryAccessible(const fs::path &canonicalPath,
+                             bool isDirectory,
+                             const std::unordered_set<std::string> &allowedFiles,
+                             const std::vector<fs::path> &allowedDirs,
+                             const std::unordered_set<std::string> &allowedAncestors,
+                             const std::unordered_set<std::string> &deniedFiles,
+                             const std::vector<fs::path> &deniedDirs,
+                             const std::unordered_set<std::string> &normalizedAllowedExtensions,
+                             const std::unordered_set<std::string> &normalizedDeniedExtensions,
+                             bool hasAllowedExt,
+                             bool hasDeniedExt,
+                             bool hasAllowedFiles)
+{
+    const bool deniedHit = isInList(canonicalPath, deniedFiles, deniedDirs);
+    if (deniedHit)
+    {
+        return false;
+    }
+
+    std::string ext = canonicalPath.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (hasDeniedExt && normalizedDeniedExtensions.count(ext))
+    {
+        return false;
+    }
+
+    const bool allowedHit = isInList(canonicalPath, allowedFiles, allowedDirs);
+    const bool allowedAncestor = allowedAncestors.count(canonicalPath.string()) > 0;
+
+    if (hasAllowedFiles)
+    {
+        if (allowedHit)
+        {
+            return true;
+        }
+
+        if (isDirectory)
+        {
+            return allowedAncestor;
+        }
+
+        return false;
+    }
+
+    if (isDirectory)
+    {
+        return true;
+    }
+
+    if (hasAllowedExt)
+    {
+        return normalizedAllowedExtensions.count(ext) > 0;
+    }
+
+    return true;
 }
