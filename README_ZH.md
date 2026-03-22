@@ -35,6 +35,7 @@ sudo apt install accio
 
 - 无需配置，一条命令即可启动共享目录
 - 网页端可视化浏览目录，支持文件上传与下载
+- 实时文字共享（Textboard），基于 Server-Sent Events，可在多设备间快速传递文字
 - 路径规范化校验，确保访问受限在共享目录之内
 
 ## 使用方法
@@ -50,6 +51,7 @@ sudo apt install accio
 - `--host <地址>`：监听地址（默认 `0.0.0.0`）
 - `--port <端口>`：监听端口（默认 `13396`，传入 `0` 可使用系统分配端口）
 - `--password[=<密码>]`：开启访问密码；不填值则随机生成。默认无密码。
+- `--enable-textboard=<on|off>`：开启或关闭文字共享功能（默认 `on`；传 `off` 关闭文字共享功能）
 - `--enable-upload=<on|off>`：开启或关闭上传功能（默认 `on`；传 `off` 关闭上传功能）
 - `--allow-exts <扩展名...>`：仅允许这些扩展名（如 `.txt .pdf`）；不可与 `--deny-exts` 同时使用
 - `--allow-files <路径...>`：允许的文件名单（相对共享根目录）；可与 `--allow-exts` 或禁用类选项组合

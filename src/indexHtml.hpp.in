@@ -13,4 +13,8 @@ namespace resources
     inline constexpr const char uploadHtml[] = R"acc_up(
 @UPLOAD_HTML_CONTENT@
 )acc_up";
+
+    inline constexpr const char textboardHtml[] = R"acc_tb(
+@TEXTBOARD_HTML_CONTENT@
+)acc_tb";
 } // namespace resources

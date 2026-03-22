@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Accio</title>
+    <title>Accio - Textboard</title>
     <style>
         :root {
             --bg: #f6f7fb;
@@ -35,7 +35,6 @@
         body {
             display: flex;
             flex-direction: column;
-            justify-content: flex-start;
             height: 100vh;
             padding: 0 10px;
             background: var(--bg);
@@ -55,6 +54,16 @@
             font-size: 22px;
         }
 
+        .home-link {
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .home-link:hover {
+            color: var(--accent);
+        }
+
         .theme-toggle {
             margin-left: auto;
             padding: 8px 12px;
@@ -70,24 +79,7 @@
             border-color: var(--accent);
         }
 
-        .textboard-link {
-            margin-left: auto;
-            padding: 8px 14px;
-            border-radius: 8px;
-            border: 1px solid var(--accent);
-            background: var(--accent);
-            color: var(--accent-contrast);
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 14px;
-            transition: filter 0.15s ease;
-        }
-
-        .textboard-link:hover {
-            filter: brightness(1.05);
-        }
-
-        .files {
+        .board {
             flex: 1;
             overflow-y: auto;
             margin-bottom: 10px;
@@ -97,56 +89,76 @@
             border-radius: 10px;
         }
 
-        ul {
-            padding-left: 12px;
-            color: var(--text);
+        .board:empty::before {
+            content: "No messages yet";
+            color: var(--muted);
+            font-style: italic;
         }
 
-        .files li {
-            color: var(--text);
+        .message {
+            padding: 10px 14px;
+            margin-bottom: 8px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 14px;
+            line-height: 1.5;
+            cursor: pointer;
+            transition: border-color 0.15s ease;
         }
 
-        .files a {
-            color: var(--text);
-            text-decoration: none;
-            font-weight: 600;
+        .message:hover {
+            border-color: var(--accent);
         }
 
-        .files a:hover {
-            color: var(--accent);
-            text-decoration: underline;
+        .message:last-child {
+            margin-bottom: 0;
         }
 
-        .upload_progress {
-            display: none;
-        }
-
-        .upload {
+        .input-area {
             display: flex;
-            align-items: center;
             gap: 12px;
-            padding: 10px 2px;
+            padding: 0 0 10px;
         }
 
-        .upload__input {
+        .input-area textarea {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--card);
             color: var(--text);
+            font-family: inherit;
+            font-size: 14px;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s ease;
         }
 
-        .upload__submit {
-            padding: 8px 14px;
+        .input-area textarea:focus {
+            border-color: var(--accent);
+        }
+
+        .send-btn {
+            padding: 10px 20px;
             border: 1px solid var(--accent);
             border-radius: 8px;
             background: var(--accent);
             color: var(--accent-contrast);
+            font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
             transition: filter 0.15s ease, transform 0.15s ease;
+            align-self: flex-end;
         }
 
-        .upload__submit:hover {
+        .send-btn:hover {
             filter: brightness(1.05);
         }
 
-        .upload__submit:active {
+        .send-btn:active {
             transform: translateY(1px);
         }
     </style>
@@ -154,13 +166,18 @@
 
 <body>
     <header class="header">
-        <h1>Accio</h1>
-        {{textboard}}
+        <h1>Accio Textboard</h1>
+        <div style="flex: 1;"></div>
+        <a class="home-link" href="/">Home</a>
         <button class="theme-toggle" type="button">Dark mode</button>
     </header>
-    {{upload}}
-    <div class="files">
-        {{files}}
+
+    <div class="board" id="board"></div>
+
+    <div class="input-area">
+        <textarea class="message-input" rows="3"
+            placeholder="Enter text... (Enter to send, Shift+Enter for new line)"></textarea>
+        <button class="send-btn" id="sendBtn">Send</button>
     </div>
 
     <script>
@@ -218,6 +235,58 @@
         });
 
         updateToggleLabel();
+
+        // --- Textboard functionality ---
+        const board = document.querySelector('.board');
+        const input = document.querySelector('.message-input');
+        const sendButton = document.querySelector('.send-btn');
+
+        const eventSource = new EventSource('/textboard/events');
+        eventSource.onmessage = (event) => {
+            const message = document.createElement('div');
+            message.className = 'message';
+            message.textContent = event.data;
+            message.title = 'Click to copy';
+            message.addEventListener('click', () => {
+                navigator.clipboard.writeText(event.data).then(() => {
+                    message.style.borderColor = 'var(--accent)';
+                    setTimeout(() => { message.style.borderColor = ''; }, 300);
+                });
+            });
+            board.appendChild(message);
+            board.scrollTop = board.scrollHeight;
+        };
+
+        const sendMessage = async () => {
+            const text = input.value.trim();
+            if (!text) return;
+            sendButton.disabled = true;
+            try {
+                const response = await fetch('/textboard/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: text
+                });
+                if (response.ok) {
+                    input.value = '';
+                } else {
+                    alert(await response.text() || 'Failed to send');
+                }
+            } catch (error) {
+                alert('Network error');
+            } finally {
+                sendButton.disabled = false;
+                input.focus();
+            }
+        };
+
+        sendButton.addEventListener('click', sendMessage);
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
     </script>
 </body>
 

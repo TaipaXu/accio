@@ -35,6 +35,7 @@ Prebuilt `.deb` archives are also available on the GitHub Releases page. Downloa
 
 - Zero-config startup with a single command-line entry point
 - Directory browser with one-click download links and upload support through the web UI
+- Real-time text sharing (Textboard) via Server-Sent Events for quick message exchange between devices
 - Path normalization safeguards to keep requests inside the shared folder
 
 ## Usage
@@ -50,6 +51,7 @@ Prebuilt `.deb` archives are also available on the GitHub Releases page. Downloa
 - `--host <addr>`: listening host (default `0.0.0.0`)
 - `--port <number>`: listening port (default `13396`, use `0` for an ephemeral port)
 - `--password[=<value>]`: enable password protection; omit value to generate one. Default: no password.
+- `--enable-textboard=<on|off>`: enable or disable the textboard feature (default `on`; use `off` to disable real-time text sharing)
 - `--enable-upload=<on|off>`: enable or disable uploads (default `on`; use `off` to disable the upload feature)
 - `--allow-exts <ext...>`: allow only these extensions (e.g., `.txt .pdf`); cannot be combined with `--deny-exts`
 - `--allow-files <path...>`: allowlisted files (relative to the shared root); can be combined with `--allow-exts` or deny options

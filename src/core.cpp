@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <algorithm>
 #include <type_traits>
 #include <stdexcept>
@@ -50,12 +51,14 @@ namespace
     constexpr int HTTP_STATUS_INTERNAL_SERVER_ERROR = 500;
     using UploadPartType = httplib::MultipartFormData;
 #endif
+
 } // namespace
 
 void Core::start(const std::string &path,
                  const std::string &uploadsPath,
                  const std::string &host,
                  unsigned short port,
+                 bool textboardEnabled,
                  bool uploadsEnabled,
                  const std::string &password,
                  bool passwordEnabled,
@@ -66,10 +69,20 @@ void Core::start(const std::string &path,
 {
     constexpr std::size_t maxRequestBytes = 50ULL * 1024ULL * 1024ULL * 1024ULL; // 50GB
 
+    {
+        std::lock_guard<std::mutex> lock(textboardMutex);
+        textboardMessage.clear();
+    }
+    textboardGeneration.store(0);
+    textboardShutdown.store(false);
+
     auto httpServer = std::make_shared<httplib::Server>();
     httpServer->set_payload_max_length(maxRequestBytes);
 
     const std::string uploadHtml = uploadsEnabled ? std::string{resources::uploadHtml} : std::string{};
+    const std::string textboardLinkHtml = textboardEnabled
+                                              ? std::string{R"(<div style="flex: 1;"></div><a href="/textboard" class="textboard-link">&#128172; Textboard</a>)"}
+                                              : std::string{};
 
     fs::path baseCandidate = path.empty() ? fs::current_path() : fs::path(path);
     if (baseCandidate.is_relative())
@@ -140,7 +153,7 @@ void Core::start(const std::string &path,
         return false;
     };
 
-    auto handleEntryRequest = [baseDir, uploadHtml, isEntryAccessible](const httplib::Request &request, httplib::Response &response) {
+    auto handleEntryRequest = [baseDir, uploadHtml, textboardLinkHtml, isEntryAccessible](const httplib::Request &request, httplib::Response &response) {
         const std::string relativePath = Util::File::normalizeRelativePath(request.path);
         fs::path target = baseDir;
         if (!relativePath.empty())
@@ -267,6 +280,12 @@ void Core::start(const std::string &path,
             html.replace(pos, uploadPlaceholder.size(), uploadHtml);
         }
 
+        const std::string textboardPlaceholder = "{{textboard}}";
+        if (std::size_t pos = html.find(textboardPlaceholder); pos != std::string::npos)
+        {
+            html.replace(pos, textboardPlaceholder.size(), textboardLinkHtml);
+        }
+
         response.set_content(std::move(html), "text/html");
     };
 
@@ -287,6 +306,88 @@ void Core::start(const std::string &path,
 
         setPlainTextResponse(response, HTTP_STATUS_UNAUTHORIZED, "Unauthorized");
     });
+
+    if (textboardEnabled)
+    {
+        httpServer->Get("/textboard", [requireAuth](const httplib::Request &request, httplib::Response &response) {
+            if (!requireAuth(request, response))
+            {
+                return;
+            }
+            response.set_content(std::string{resources::textboardHtml}, "text/html");
+        });
+
+        httpServer->Post("/textboard/send", [this, requireAuth](const httplib::Request &request, httplib::Response &response) {
+            if (!requireAuth(request, response))
+            {
+                return;
+            }
+
+            const std::string &text = request.body;
+            if (text.empty())
+            {
+                setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "Empty message");
+                return;
+            }
+
+            constexpr std::size_t maxMessageSize = 10U * 1024U; // 10KB
+            if (text.size() > maxMessageSize)
+            {
+                setPlainTextResponse(response, HTTP_STATUS_BAD_REQUEST, "Message too large");
+                return;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(textboardMutex);
+                textboardMessage = text;
+                ++textboardGeneration;
+            }
+            textboardCV.notify_all();
+
+            setPlainTextResponse(response, HTTP_STATUS_OK, "OK");
+        });
+
+        httpServer->Get("/textboard/events", [this, requireAuth](const httplib::Request &request, httplib::Response &response) {
+            if (!requireAuth(request, response))
+            {
+                return;
+            }
+
+            response.set_header("Cache-Control", "no-cache");
+            response.set_header("X-Accel-Buffering", "no");
+
+            response.set_chunked_content_provider(
+                "text/event-stream",
+                [this, lastSeen = textboardGeneration.load()](std::size_t, httplib::DataSink &sink) mutable {
+                    std::string message;
+                    {
+                        std::unique_lock<std::mutex> lock(textboardMutex);
+                        textboardCV.wait_for(lock, std::chrono::seconds(2), [this, &lastSeen]() {
+                            return textboardGeneration > lastSeen || textboardShutdown.load();
+                        });
+                        if (textboardShutdown.load())
+                        {
+                            return false;
+                        }
+                        if (textboardGeneration > lastSeen)
+                        {
+                            message = textboardMessage;
+                            lastSeen = textboardGeneration;
+                        }
+                    }
+
+                    if (!message.empty())
+                    {
+                        const std::string sseData = Core::formatSSEMessage(message);
+                        return sink.write(sseData.c_str(), sseData.size());
+                    }
+
+                    static constexpr char heartbeat[] = ": heartbeat\n\n";
+                    return sink.write(heartbeat, sizeof(heartbeat) - 1);
+                },
+                [](bool) {});
+        });
+    }
 
     httpServer->Get(R"(/.*)", [requireAuth, handleEntryRequest](const httplib::Request &request, httplib::Response &response) {
         if (!requireAuth(request, response))
@@ -497,7 +598,7 @@ void Core::start(const std::string &path,
         this->server = httpServer;
     }
 
-    logStartupInfo(listenerHost, boundPort, uploadsDirStr, uploadsEnabled, password, authEnabled);
+    logStartupInfo(listenerHost, boundPort, uploadsDirStr, textboardEnabled, uploadsEnabled, password, authEnabled);
 
     httpServer->listen_after_bind();
 
@@ -509,6 +610,9 @@ void Core::start(const std::string &path,
 
 void Core::stop()
 {
+    textboardShutdown.store(true);
+    textboardCV.notify_all();
+
     std::shared_ptr<httplib::Server> runningServer;
     {
         std::lock_guard<std::mutex> guard(serverMutex);
@@ -524,6 +628,7 @@ void Core::stop()
 void Core::logStartupInfo(const std::string &host,
                           unsigned short port,
                           const std::string &uploadsDir,
+                          bool textboardEnabled,
                           bool uploadsEnabled,
                           const std::string &password,
                           bool passwordEnabled)
@@ -609,6 +714,16 @@ void Core::logStartupInfo(const std::string &host,
     {
         printLine(colorEnabled, label, url);
     }
+
+    if (textboardEnabled)
+    {
+        printLine(colorEnabled, "Textboard:", "enabled");
+    }
+    else
+    {
+        printLine(colorEnabled, "Textboard:", "disabled", Color::Red);
+    }
+
     if (uploadsEnabled)
     {
         printLine(colorEnabled, "Uploads:", uploadsDir);
@@ -640,7 +755,7 @@ void Core::logStartupInfo(const std::string &host,
 
 void Core::printLine(bool colorEnabled, const std::string &label, const std::string &value, Color color)
 {
-    constexpr std::size_t labelWidth = 10U;
+    constexpr std::size_t labelWidth = 11U;
     const std::string padding = label.size() < labelWidth ? std::string(labelWidth - label.size(), ' ') : "";
 
     if (colorEnabled)
@@ -789,6 +904,28 @@ bool Core::streamFileResponse(httplib::Response &response, const fs::path &fileP
         });
 
     return true;
+}
+
+std::string Core::formatSSEMessage(const std::string &text)
+{
+    std::string result;
+    if (text.empty())
+    {
+        result = "data: \n\n";
+        return result;
+    }
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        result += "data: " + line + "\n";
+    }
+    result += "\n";
+    return result;
 }
 
 bool Core::caseInsensitiveLess(const std::string &lhs, const std::string &rhs)

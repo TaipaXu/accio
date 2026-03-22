@@ -58,6 +58,7 @@ int main(int argc, char *argv[])
         ("port", po::value<std::string>()->implicit_value(""), "Server port (default: 13396)")   // port option
         ("password", po::value<std::string>()->implicit_value(""),
          "Enable password; omit value to generate one, or pass a value to set it. Default: no password")                                                             // password option
+        ("enable-textboard", po::value<std::string>()->default_value("on")->implicit_value("on"), "Enable textboard feature (on/off, default: on)")                  // enable-textboard option
         ("enable-upload", po::value<std::string>()->default_value("on")->implicit_value("on"), "Enable upload feature (on/off, default: on)")                        // enable-upload option
         ("allow-exts", po::value<std::vector<std::string>>()->multitoken(), "Allowed file extensions (e.g., --allow-exts .txt .pdf)")                                // allow-exts option
         ("allow-files", po::value<std::vector<std::string>>()->multitoken(), "Allowed specific files (relative paths, e.g., --allow-files secret.txt sub/notes.md)") // allow-files option
@@ -185,6 +186,36 @@ int main(int argc, char *argv[])
             }
         }
 
+        std::string textboardEnabledValue = "on";
+        if (variablesMap.count("enable-textboard"))
+        {
+            textboardEnabledValue = variablesMap["enable-textboard"].as<std::string>();
+            if (textboardEnabledValue.empty())
+            {
+                std::cerr << "Missing value for option '--enable-textboard' (use 'on' or 'off')" << std::endl;
+                std::cerr << optionsDescription << std::endl;
+                return EXIT_FAILURE;
+            }
+        }
+
+        const std::string textboardEnabledLower = Util::String::toLowerCopy(textboardEnabledValue);
+
+        bool textboardEnabled = false;
+        if (textboardEnabledLower == "on")
+        {
+            textboardEnabled = true;
+        }
+        else if (textboardEnabledLower == "off")
+        {
+            textboardEnabled = false;
+        }
+        else
+        {
+            std::cerr << "Invalid value for '--enable-textboard': " << textboardEnabledValue << " (expected 'on' or 'off')" << std::endl;
+            std::cerr << optionsDescription << std::endl;
+            return EXIT_FAILURE;
+        }
+
         std::string uploadsEnabledValue = "on";
         if (variablesMap.count("enable-upload"))
         {
@@ -259,7 +290,7 @@ int main(int argc, char *argv[])
 
         Core core;
         installSignalHandlers(core);
-        core.start(path, uploadsPath, host, port, uploadsEnabled, password, passwordEnabled,
+        core.start(path, uploadsPath, host, port, textboardEnabled, uploadsEnabled, password, passwordEnabled,
                    allowedExtensions, deniedExtensions, allowedFiles, deniedFiles);
 
         if (shutdownRequested.load())

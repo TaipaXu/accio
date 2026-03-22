@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,6 +33,7 @@ public:
                const std::string &uploadsPath,
                const std::string &host,
                unsigned short port,
+               bool textboardEnabled,
                bool uploadsEnabled,
                const std::string &password,
                bool passwordEnabled,
@@ -45,6 +47,7 @@ private:
     static void logStartupInfo(const std::string &host,
                                unsigned short port,
                                const std::string &uploadsDir,
+                               bool textboardEnabled,
                                bool uploadsEnabled,
                                const std::string &password,
                                bool passwordEnabled);
@@ -54,6 +57,7 @@ private:
     static inline void setPlainTextResponse(httplib::Response &response, int status, std::string_view body);
     static std::string buildContentDispositionHeader(const std::string &filename);
     static bool streamFileResponse(httplib::Response &response, const std::filesystem::path &filePath);
+    static std::string formatSSEMessage(const std::string &text);
     static bool caseInsensitiveLess(const std::string &lhs, const std::string &rhs);
     static std::unordered_set<std::string> normalizeExtensions(const std::vector<std::string> &extensions);
     static void resolveDeniedPaths(const std::vector<std::string> &items,
@@ -87,4 +91,10 @@ private:
     std::unordered_set<std::string> authorizedIps;
     std::mutex serverMutex;
     std::shared_ptr<httplib::Server> server;
+
+    std::mutex textboardMutex;
+    std::condition_variable textboardCV;
+    std::string textboardMessage;
+    std::atomic<std::size_t> textboardGeneration{0};
+    std::atomic<bool> textboardShutdown{false};
 };
