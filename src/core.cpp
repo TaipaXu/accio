@@ -11,7 +11,6 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <algorithm>
 #include <stdexcept>
 #include <system_error>
@@ -727,14 +726,8 @@ void Core::logStartupInfo(const std::string &listenerHost,
         printLine(colorEnabled, label, url);
     }
 
-    if (textboardEnabled)
-    {
-        printLine(colorEnabled, "Textboard:", "enabled");
-    }
-    else
-    {
-        printLine(colorEnabled, "Textboard:", "disabled", Color::Red);
-    }
+    printLine(colorEnabled, "Textboard:", textboardEnabled ? "enabled" : "disabled",
+              textboardEnabled ? Color::Green : Color::Red);
 
     if (uploadsEnabled)
     {
@@ -920,35 +913,53 @@ bool Core::streamFileResponse(httplib::Response &response, const fs::path &fileP
 
 std::string Core::formatSSEMessage(const std::string &text)
 {
-    std::string result;
     if (text.empty())
     {
-        result = "data: \n\n";
-        return result;
+        return "data: \n\n";
     }
-    std::istringstream stream(text);
-    std::string line;
-    while (std::getline(stream, line))
+
+    std::string result;
+    result.reserve(text.size() + 16);
+    std::string_view remaining{text};
+    while (!remaining.empty())
     {
+        auto pos = remaining.find('\n');
+        auto line = remaining.substr(0, pos);
         if (!line.empty() && line.back() == '\r')
-        {
-            line.pop_back();
-        }
-        result += "data: " + line + "\n";
+            line.remove_suffix(1);
+        result += "data: ";
+        result.append(line);
+        result += '\n';
+        if (pos == std::string_view::npos)
+            break;
+        remaining.remove_prefix(pos + 1);
     }
-    result += "\n";
+    result += '\n';
     return result;
 }
 
 bool Core::caseInsensitiveLess(const std::string &lhs, const std::string &rhs)
 {
-    const std::string lhsLower = Util::String::toLowerCopy(lhs);
-    const std::string rhsLower = Util::String::toLowerCopy(rhs);
-    if (lhsLower == rhsLower)
+    int tiebreaker = 0;
+    auto li = lhs.begin(), ri = rhs.begin();
+    for (; li != lhs.end() && ri != rhs.end(); ++li, ++ri)
     {
-        return lhs < rhs;
+        const auto lc = std::tolower(static_cast<unsigned char>(*li));
+        const auto rc = std::tolower(static_cast<unsigned char>(*ri));
+        if (lc != rc)
+        {
+            return lc < rc;
+        }
+        if (tiebreaker == 0 && *li != *ri)
+        {
+            tiebreaker = (*li < *ri) ? -1 : 1;
+        }
     }
-    return lhsLower < rhsLower;
+    if (lhs.size() != rhs.size())
+    {
+        return lhs.size() < rhs.size();
+    }
+    return tiebreaker < 0;
 }
 
 std::unordered_set<std::string> Core::normalizeExtensions(const std::vector<std::string> &extensions)

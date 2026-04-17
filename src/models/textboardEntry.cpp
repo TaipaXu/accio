@@ -1,6 +1,12 @@
 #include "textboardEntry.hpp"
-#include <format>
+#include <version>
 #include <utility>
+#if defined(__cpp_lib_format) && defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+#include <format>
+#else
+#include <ctime>
+#include <cstdio>
+#endif
 
 namespace Model
 {
@@ -14,8 +20,17 @@ namespace Model
 
     std::string TextboardEntry::formatTime() const
     {
+#if defined(__cpp_lib_format) && defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
         const auto localTime = std::chrono::zoned_time{std::chrono::current_zone(), std::chrono::floor<std::chrono::seconds>(time)};
         return std::format("{:%Y-%m-%d %H:%M:%S}", localTime);
+#else
+        const time_t tt = std::chrono::system_clock::to_time_t(time);
+        std::tm local{};
+        localtime_r(&tt, &local);
+        char buf[20];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local);
+        return std::string{buf};
+#endif
     }
 
     std::string TextboardEntry::toJson() const

@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <optional>
 #include <atomic>
 #include <stdexcept>
 #include <cstdlib>
@@ -41,6 +42,56 @@ namespace
 #ifdef SIGTERM
         std::signal(SIGTERM, handleShutdownSignal);
 #endif
+    }
+
+    namespace po = boost::program_options;
+
+    std::optional<std::string> getOption(const po::variables_map &vm,
+                                         const po::options_description &desc,
+                                         const char *name,
+                                         const char *fallback = nullptr)
+    {
+        if (!vm.count(name))
+        {
+            return fallback ? std::string{fallback} : std::string{};
+        }
+        std::string value = vm[name].as<std::string>();
+        if (value.empty())
+        {
+            std::cerr << "Missing value for option '--" << name << "'" << std::endl;
+            std::cerr << desc << std::endl;
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    std::optional<bool> parseOnOff(const po::variables_map &vm,
+                                   const po::options_description &desc,
+                                   const char *name)
+    {
+        std::optional<std::string> val = getOption(vm, desc, name);
+        if (!val)
+        {
+            return std::nullopt;
+        }
+        std::string lower = Util::String::toLowerCopy(*val);
+        if (lower == "on")
+        {
+            return true;
+        }
+        if (lower == "off")
+        {
+            return false;
+        }
+        std::cerr << "Invalid value for '--" << name << "': " << *val
+                  << " (expected 'on' or 'off')" << std::endl;
+        std::cerr << desc << std::endl;
+        return std::nullopt;
+    }
+
+    std::vector<std::string> getMultiOption(const po::variables_map &vm, const char *name)
+    {
+        return vm.count(name) ? vm[name].as<std::vector<std::string>>() : std::vector<std::string>{};
     }
 } // namespace
 
@@ -101,74 +152,50 @@ int main(int argc, char *argv[])
     }
     else
     {
-        std::string path;
-        if (variablesMap.count("path"))
+        std::optional<std::string> path = getOption(variablesMap, optionsDescription, "path");
+        if (!path)
         {
-            path = variablesMap["path"].as<std::string>();
-            if (path.empty())
-            {
-                std::cerr << "Missing value for option '--path'" << std::endl;
-                std::cerr << optionsDescription << std::endl;
-                return EXIT_FAILURE;
-            }
+            return EXIT_FAILURE;
         }
 
-        std::string uploadsPath;
-        if (variablesMap.count("uploads"))
+        std::optional<std::string> uploadsPath = getOption(variablesMap, optionsDescription, "uploads");
+        if (!uploadsPath)
         {
-            uploadsPath = variablesMap["uploads"].as<std::string>();
-            if (uploadsPath.empty())
-            {
-                std::cerr << "Missing value for option '--uploads'" << std::endl;
-                std::cerr << optionsDescription << std::endl;
-                return EXIT_FAILURE;
-            }
+            return EXIT_FAILURE;
         }
 
-        std::string host = "0.0.0.0";
-        if (variablesMap.count("host"))
+        std::optional<std::string> host = getOption(variablesMap, optionsDescription, "host", "0.0.0.0");
+        if (!host)
         {
-            host = variablesMap["host"].as<std::string>();
-            if (host.empty())
-            {
-                std::cerr << "Missing value for option '--host'" << std::endl;
-                std::cerr << optionsDescription << std::endl;
-                return EXIT_FAILURE;
-            }
+            return EXIT_FAILURE;
         }
 
-        std::string portString = "13396";
-        if (variablesMap.count("port"))
+        std::optional<std::string> portString = getOption(variablesMap, optionsDescription, "port", "13396");
+        if (!portString)
         {
-            portString = variablesMap["port"].as<std::string>();
-            if (portString.empty())
-            {
-                std::cerr << "Missing value for option '--port'" << std::endl;
-                std::cerr << optionsDescription << std::endl;
-                return EXIT_FAILURE;
-            }
+            return EXIT_FAILURE;
         }
 
         unsigned long portValue = 0;
         try
         {
             std::size_t parsed = 0;
-            portValue = std::stoul(portString, &parsed, 10);
-            if (parsed != portString.size())
+            portValue = std::stoul(*portString, &parsed, 10);
+            if (parsed != portString->size())
             {
                 throw std::invalid_argument("trailing characters");
             }
         }
         catch (const std::exception &)
         {
-            std::cerr << "Invalid value for option '--port': " << portString << std::endl;
+            std::cerr << "Invalid value for option '--port': " << *portString << std::endl;
             std::cerr << optionsDescription << std::endl;
             return EXIT_FAILURE;
         }
 
         if (portValue > std::numeric_limits<unsigned short>::max())
         {
-            std::cerr << "Invalid value for option '--port': " << portString << std::endl;
+            std::cerr << "Invalid value for option '--port': " << *portString << std::endl;
             std::cerr << optionsDescription << std::endl;
             return EXIT_FAILURE;
         }
@@ -186,89 +213,22 @@ int main(int argc, char *argv[])
             }
         }
 
-        std::string textboardEnabledValue = "on";
-        if (variablesMap.count("enable-textboard"))
+        std::optional<bool> textboardEnabled = parseOnOff(variablesMap, optionsDescription, "enable-textboard");
+        if (!textboardEnabled)
         {
-            textboardEnabledValue = variablesMap["enable-textboard"].as<std::string>();
-            if (textboardEnabledValue.empty())
-            {
-                std::cerr << "Missing value for option '--enable-textboard' (use 'on' or 'off')" << std::endl;
-                std::cerr << optionsDescription << std::endl;
-                return EXIT_FAILURE;
-            }
-        }
-
-        const std::string textboardEnabledLower = Util::String::toLowerCopy(textboardEnabledValue);
-
-        bool textboardEnabled = false;
-        if (textboardEnabledLower == "on")
-        {
-            textboardEnabled = true;
-        }
-        else if (textboardEnabledLower == "off")
-        {
-            textboardEnabled = false;
-        }
-        else
-        {
-            std::cerr << "Invalid value for '--enable-textboard': " << textboardEnabledValue << " (expected 'on' or 'off')" << std::endl;
-            std::cerr << optionsDescription << std::endl;
             return EXIT_FAILURE;
         }
 
-        std::string uploadsEnabledValue = "on";
-        if (variablesMap.count("enable-upload"))
+        std::optional<bool> uploadsEnabled = parseOnOff(variablesMap, optionsDescription, "enable-upload");
+        if (!uploadsEnabled)
         {
-            uploadsEnabledValue = variablesMap["enable-upload"].as<std::string>();
-            if (uploadsEnabledValue.empty())
-            {
-                std::cerr << "Missing value for option '--enable-upload' (use 'on' or 'off')" << std::endl;
-                std::cerr << optionsDescription << std::endl;
-                return EXIT_FAILURE;
-            }
-        }
-
-        const std::string uploadsEnabledLower = Util::String::toLowerCopy(uploadsEnabledValue);
-
-        bool uploadsEnabled = false;
-        if (uploadsEnabledLower == "on")
-        {
-            uploadsEnabled = true;
-        }
-        else if (uploadsEnabledLower == "off")
-        {
-            uploadsEnabled = false;
-        }
-        else
-        {
-            std::cerr << "Invalid value for '--enable-upload': " << uploadsEnabledValue << " (expected 'on' or 'off')" << std::endl;
-            std::cerr << optionsDescription << std::endl;
             return EXIT_FAILURE;
         }
 
-        std::vector<std::string> allowedExtensions;
-        if (variablesMap.count("allow-exts"))
-        {
-            allowedExtensions = variablesMap["allow-exts"].as<std::vector<std::string>>();
-        }
-
-        std::vector<std::string> allowedFiles;
-        if (variablesMap.count("allow-files"))
-        {
-            allowedFiles = variablesMap["allow-files"].as<std::vector<std::string>>();
-        }
-
-        std::vector<std::string> deniedExtensions;
-        if (variablesMap.count("deny-exts"))
-        {
-            deniedExtensions = variablesMap["deny-exts"].as<std::vector<std::string>>();
-        }
-
-        std::vector<std::string> deniedFiles;
-        if (variablesMap.count("deny-files"))
-        {
-            deniedFiles = variablesMap["deny-files"].as<std::vector<std::string>>();
-        }
+        std::vector<std::string> allowedExtensions = getMultiOption(variablesMap, "allow-exts");
+        std::vector<std::string> allowedFiles = getMultiOption(variablesMap, "allow-files");
+        std::vector<std::string> deniedExtensions = getMultiOption(variablesMap, "deny-exts");
+        std::vector<std::string> deniedFiles = getMultiOption(variablesMap, "deny-files");
 
         if (Util::File::hasAbsolutePaths(allowedFiles))
         {
@@ -290,7 +250,7 @@ int main(int argc, char *argv[])
 
         Core core;
         installSignalHandlers(core);
-        core.start(path, uploadsPath, host, port, textboardEnabled, uploadsEnabled, password, passwordEnabled,
+        core.start(*path, *uploadsPath, *host, port, *textboardEnabled, *uploadsEnabled, password, passwordEnabled,
                    allowedExtensions, deniedExtensions, allowedFiles, deniedFiles);
 
         if (shutdownRequested.load())

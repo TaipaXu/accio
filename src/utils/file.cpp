@@ -2,10 +2,14 @@
 #include <vector>
 #include <string>
 #include <tuple>
+#include <version>
+#ifdef __cpp_lib_format
+#include <format>
+#else
+#include <cstdio>
+#endif
 #include <iostream>
 #include <fstream>
-#include <sstream>
-#include <iomanip>
 #include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
@@ -456,52 +460,36 @@ namespace Util::File
         constexpr std::uintmax_t GB = MB * 1024;
         constexpr std::uintmax_t TB = GB * 1024;
 
-        auto formatWithUnit = [](double value, const char *unit) {
-            std::ostringstream oss;
+        auto format = [](double value, const char *unit) {
+#ifdef __cpp_lib_format
             if (value < 10.0)
-            {
-                oss << std::fixed << std::setprecision(2);
-            }
-            else if (value < 100.0)
-            {
-                oss << std::fixed << std::setprecision(1);
-            }
-            else
-            {
-                oss << std::fixed << std::setprecision(0);
-            }
-            oss << value << ' ' << unit;
-            return oss.str();
+                return std::format("{:.2f} {}", value, unit);
+            if (value < 100.0)
+                return std::format("{:.1f} {}", value, unit);
+            return std::format("{:.0f} {}", value, unit);
+#else
+            char buf[64];
+            int prec = value < 10.0 ? 2 : (value < 100.0 ? 1 : 0);
+            std::snprintf(buf, sizeof(buf), "%.*f %s", prec, value, unit);
+            return std::string{buf};
+#endif
         };
 
         if (bytes >= TB)
-        {
-            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(TB), "TB");
-        }
+            return format(static_cast<double>(bytes) / static_cast<double>(TB), "TB");
         if (bytes >= GB)
-        {
-            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(GB), "GB");
-        }
+            return format(static_cast<double>(bytes) / static_cast<double>(GB), "GB");
         if (bytes >= MB)
-        {
-            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(MB), "MB");
-        }
+            return format(static_cast<double>(bytes) / static_cast<double>(MB), "MB");
         if (bytes >= KB)
-        {
-            return formatWithUnit(static_cast<double>(bytes) / static_cast<double>(KB), "KB");
-        }
+            return format(static_cast<double>(bytes) / static_cast<double>(KB), "KB");
         return std::to_string(bytes) + " B";
     }
 
     bool hasAbsolutePaths(const std::vector<std::string> &items)
     {
-        for (const auto &v : items)
-        {
-            if (fs::path(v).is_absolute())
-            {
-                return true;
-            }
-        }
-        return false;
+        return std::any_of(items.begin(), items.end(), [](const std::string &v) {
+            return fs::path(v).is_absolute();
+        });
     }
 } // namespace Util::File
