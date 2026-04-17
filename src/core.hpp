@@ -9,6 +9,7 @@
 #include <vector>
 #include <filesystem>
 #include <unordered_set>
+#include "models/textboardEntry.hpp"
 
 namespace httplib
 {
@@ -94,7 +95,6 @@ private:
 
     std::mutex textboardMutex;
     std::condition_variable textboardCV;
-    std::string textboardMessage;
-    std::atomic<std::size_t> textboardGeneration{0};
+    std::vector<Model::TextboardEntry> textboardHistory;
     std::atomic<bool> textboardShutdown{false};
 };

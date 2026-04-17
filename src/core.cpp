@@ -13,7 +13,6 @@
 #include <mutex>
 #include <sstream>
 #include <algorithm>
-#include <type_traits>
 #include <stdexcept>
 #include <system_error>
 #include <httplib.h>
@@ -71,9 +70,8 @@ void Core::start(const std::string &path,
 
     {
         std::lock_guard<std::mutex> lock(textboardMutex);
-        textboardMessage.clear();
+        textboardHistory.clear();
     }
-    textboardGeneration.store(0);
     textboardShutdown.store(false);
 
     auto httpServer = std::make_shared<httplib::Server>();
@@ -91,7 +89,7 @@ void Core::start(const std::string &path,
     }
 
     std::error_code ec;
-    const std::filesystem::path baseDir = fs::weakly_canonical(baseCandidate, ec);
+    const fs::path baseDir = fs::weakly_canonical(baseCandidate, ec);
     if (ec || !fs::exists(baseDir) || !fs::is_directory(baseDir))
     {
         throw std::runtime_error("invalid base directory: " + baseCandidate.string());
@@ -162,7 +160,7 @@ void Core::start(const std::string &path,
         }
 
         std::error_code ec;
-        const std::filesystem::path canonicalTarget = fs::weakly_canonical(target, ec);
+        const fs::path canonicalTarget = fs::weakly_canonical(target, ec);
         if (ec || !fs::exists(canonicalTarget) || !Util::File::isWithinBase(canonicalTarget, baseDir))
         {
             setPlainTextResponse(response, HTTP_STATUS_NOT_FOUND, "Entry not found");
@@ -209,7 +207,7 @@ void Core::start(const std::string &path,
             const bool entryIsDirectory = entry.is_directory();
 
             std::error_code childEc;
-            const std::filesystem::path entryCanonical = fs::weakly_canonical(entry.path(), childEc);
+            const fs::path entryCanonical = fs::weakly_canonical(entry.path(), childEc);
             if (childEc)
             {
                 continue;
@@ -230,7 +228,7 @@ void Core::start(const std::string &path,
                     fileSize = 0;
                 }
             }
-            entries.push_back(Entry{entry.path().filename().string(), entry.is_directory(), fileSize});
+            entries.push_back(Entry{entry.path().filename().string(), entryIsDirectory, fileSize});
         }
 
         std::sort(entries.begin(), entries.end(), [](const Entry &lhs, const Entry &rhs) {
@@ -339,8 +337,7 @@ void Core::start(const std::string &path,
 
             {
                 std::lock_guard<std::mutex> lock(textboardMutex);
-                textboardMessage = text;
-                ++textboardGeneration;
+                textboardHistory.emplace_back(request.remote_addr, text);
             }
             textboardCV.notify_all();
 
@@ -358,27 +355,43 @@ void Core::start(const std::string &path,
 
             response.set_chunked_content_provider(
                 "text/event-stream",
-                [this, lastSeen = textboardGeneration.load()](std::size_t, httplib::DataSink &sink) mutable {
-                    std::string message;
+                [this, historyFlushed = false, lastSeen = std::size_t{0}](std::size_t, httplib::DataSink &sink) mutable {
+                    if (!historyFlushed)
+                    {
+                        historyFlushed = true;
+                        std::lock_guard<std::mutex> lock(textboardMutex);
+                        for (const auto &entry : textboardHistory)
+                        {
+                            const std::string sseData = Core::formatSSEMessage(entry.toJson());
+                            if (!sink.write(sseData.c_str(), sseData.size()))
+                            {
+                                return false;
+                            }
+                        }
+                        lastSeen = textboardHistory.size();
+                        return true;
+                    }
+
+                    std::string json;
                     {
                         std::unique_lock<std::mutex> lock(textboardMutex);
                         textboardCV.wait_for(lock, std::chrono::seconds(2), [this, &lastSeen]() {
-                            return textboardGeneration > lastSeen || textboardShutdown.load();
+                            return textboardHistory.size() > lastSeen || textboardShutdown.load();
                         });
                         if (textboardShutdown.load())
                         {
                             return false;
                         }
-                        if (textboardGeneration > lastSeen)
+                        if (textboardHistory.size() > lastSeen)
                         {
-                            message = textboardMessage;
-                            lastSeen = textboardGeneration;
+                            json = textboardHistory.back().toJson();
+                            lastSeen = textboardHistory.size();
                         }
                     }
 
-                    if (!message.empty())
+                    if (!json.empty())
                     {
-                        const std::string sseData = Core::formatSSEMessage(message);
+                        const std::string sseData = Core::formatSSEMessage(json);
                         return sink.write(sseData.c_str(), sseData.size());
                     }
 
@@ -625,7 +638,7 @@ void Core::stop()
     }
 }
 
-void Core::logStartupInfo(const std::string &host,
+void Core::logStartupInfo(const std::string &listenerHost,
                           unsigned short port,
                           const std::string &uploadsDir,
                           bool textboardEnabled,
@@ -633,7 +646,6 @@ void Core::logStartupInfo(const std::string &host,
                           const std::string &password,
                           bool passwordEnabled)
 {
-    const std::string listenerHost = host.empty() ? std::string{"0.0.0.0"} : host;
     const auto formatUrl = [port](const std::string &address) {
         const std::string target = address.empty() ? std::string{"0.0.0.0"} : address;
         const bool requiresBrackets = target.find(':') != std::string::npos && target.front() != '[';
@@ -964,7 +976,7 @@ void Core::resolveDeniedPaths(const std::vector<std::string> &items,
     {
         fs::path candidate{baseDir / fs::path{pathStr}};
         std::error_code fileEc;
-        const std::filesystem::path canonicalPath = fs::weakly_canonical(candidate, fileEc);
+        const fs::path canonicalPath = fs::weakly_canonical(candidate, fileEc);
         if (fileEc)
         {
             continue;
@@ -987,16 +999,23 @@ void Core::resolveAllowedPaths(const std::vector<std::string> &items,
                                std::vector<fs::path> &outDirs,
                                std::unordered_set<std::string> &outAncestors)
 {
-    Core::resolveDeniedPaths(items, baseDir, outFiles, outDirs);
-
     for (const auto &pathStr : items)
     {
         fs::path candidate{baseDir / fs::path{pathStr}};
         std::error_code fileEc;
-        const std::filesystem::path canonicalPath = fs::weakly_canonical(candidate, fileEc);
+        const fs::path canonicalPath = fs::weakly_canonical(candidate, fileEc);
         if (fileEc)
         {
             continue;
+        }
+
+        if (fs::is_directory(canonicalPath))
+        {
+            outDirs.push_back(canonicalPath);
+        }
+        else
+        {
+            outFiles.insert(canonicalPath.string());
         }
 
         fs::path currentPath = canonicalPath;

@@ -32,8 +32,13 @@ set(SOURCES
     main.cpp
     core.hpp
     core.cpp
+    models/textboardEntry.hpp
+    models/textboardEntry.cpp
+    utils/file.hpp
     utils/file.cpp
+    utils/string.hpp
     utils/string.cpp
+    utils/network.hpp
     utils/network.cpp
 )
 
